@@ -1,14 +1,9 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useWallet, useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
-import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import type { Idl } from "@coral-xyz/anchor";
-import idl from "@/lib/idl.json";
 
 interface UserData {
   walletAddress: string;
@@ -18,27 +13,19 @@ interface UserData {
   hasClaimed: boolean;
   monthlyCommitment: number | null;
   fhsaProvider: string | null;
+  totalMonths: number;
+  monthsCompleted: number;
+  graduated: boolean;
 }
 
 type Toast = { type: "success" | "error"; message: string };
 
-function StatusBadge({ label, color }: { label: string; color: string }) {
-  return (
-    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${color}`}>
-      {label}
-    </span>
-  );
-}
-
 export default function DashboardPage() {
   const { publicKey, connected } = useWallet();
-  const anchorWallet = useAnchorWallet();
-  const { connection } = useConnection();
   const router = useRouter();
 
   const [user, setUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [depositing, setDepositing] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
 
   const showToast = useCallback((t: Toast) => {
@@ -67,87 +54,30 @@ export default function DashboardPage() {
     fetchUser(publicKey.toBase58()).finally(() => setLoading(false));
   }, [connected, publicKey, router, fetchUser]);
 
-  const program = useMemo(() => {
-    if (!anchorWallet) return null;
-    const provider = new AnchorProvider(connection, anchorWallet, { commitment: "confirmed" });
-    return new Program(idl as Idl, provider);
-  }, [anchorWallet, connection]);
-
-  async function handleDepositStake() {
-    if (!publicKey || !program || !user?.monthlyCommitment) return;
-
-    const usdcMintAddr = process.env.NEXT_PUBLIC_USDC_MINT;
-    if (!usdcMintAddr) {
-      showToast({ type: "error", message: "USDC mint not configured." });
-      return;
-    }
-
-    setDepositing(true);
-    try {
-      const usdcMint = new PublicKey(usdcMintAddr);
-      const amount = new BN(user.monthlyCommitment * 1_000_000);
-
-      const [userAccountPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("user_account"), publicKey.toBuffer()],
-        program.programId
-      );
-      const [vaultPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("vault"), publicKey.toBuffer()],
-        program.programId
-      );
-      const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, publicKey);
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (program.methods as any)
-        .depositStake(amount)
-        .accounts({
-          user: publicKey,
-          userAccount: userAccountPda,
-          vault: vaultPda,
-          userUsdcAta,
-          usdcMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-
-      await fetch(`/api/user/${publicKey.toBase58()}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isActive: true }),
-      });
-
-      showToast({ type: "success", message: "Stake deposited!" });
-      await fetchUser(publicKey.toBase58());
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Transaction failed";
-      showToast({ type: "error", message: msg.slice(0, 120) });
-    } finally {
-      setDepositing(false);
-    }
-  }
+  // showToast is used for future claim flow; suppress unused warning
+  void showToast;
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-black dark:border-gray-700 dark:border-t-white" />
+      <main className="flex min-h-screen items-center justify-center bg-white">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-200 border-t-gray-600" />
       </main>
     );
   }
 
   if (!user) return null;
 
-  const walletShort = publicKey
-    ? `${publicKey.toBase58().slice(0, 4)}...${publicKey.toBase58().slice(-4)}`
-    : "";
+  const totalMonths = user.totalMonths || 3;
+  const monthsCompleted = user.monthsCompleted || 0;
+  const progressPct = Math.round((monthsCompleted / totalMonths) * 100);
 
   return (
-    <main className="flex min-h-screen flex-col items-center p-8">
+    <main className="flex min-h-screen flex-col items-center bg-white p-8">
       {/* Toast */}
       {toast && (
         <div
           className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full px-5 py-3 text-sm font-semibold text-white shadow-lg ${
-            toast.type === "success" ? "bg-green-600" : "bg-red-600"
+            toast.type === "success" ? "bg-violet-700" : "bg-red-500"
           }`}
         >
           {toast.message}
@@ -155,24 +85,21 @@ export default function DashboardPage() {
       )}
 
       {/* Header */}
-      <header className="flex w-full max-w-lg items-center justify-between pb-8">
-        <span className="text-xl font-bold">Groundwork</span>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-400">{walletShort}</span>
-          <WalletMultiButton />
-        </div>
+      <header className="flex w-full max-w-md items-center justify-between pb-8">
+        <span className="text-lg font-bold tracking-tight text-gray-900">Groundwork</span>
+        <WalletMultiButton />
       </header>
 
-      <div className="w-full max-w-lg space-y-5">
+      <div className="w-full max-w-md space-y-4">
         {/* Streak card */}
-        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950">
-          <p className="text-sm text-gray-500">Current streak</p>
-          <p className="mt-1 text-5xl font-bold">
+        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">Current streak</p>
+          <p className="mt-2 text-5xl font-bold text-gray-900">
             {user.streak}
-            <span className="ml-1 text-2xl font-normal text-gray-400">mo</span>
+            <span className="ml-2 text-xl font-normal text-gray-400">mo</span>
           </p>
           {user.streak >= 3 && (
-            <p className="mt-2 text-sm text-green-600 dark:text-green-400">
+            <p className="mt-2 text-xs font-medium text-violet-600">
               {user.streak >= 24
                 ? "24+ month tier — 400 COMMIT / month"
                 : user.streak >= 12
@@ -184,100 +111,88 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* State card */}
-        {!user.isActive ? (
-          <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="font-semibold">This month&apos;s commitment</p>
-                <p className="mt-1 text-sm text-gray-500">
-                  No active stake. Deposit USDC to lock in your commitment.
-                </p>
-              </div>
-              <StatusBadge
-                label="Inactive"
-                color="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
-              />
+        {/* Status card */}
+        {user.graduated ? (
+          <div className="rounded-2xl border border-violet-200 bg-violet-50 p-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold text-gray-900">Commitment complete</p>
+              <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold text-violet-700">Graduated 🎓</span>
             </div>
-            {user.monthlyCommitment && (
-              <p className="mt-4 text-3xl font-bold">
-                ${user.monthlyCommitment.toLocaleString()}{" "}
-                <span className="text-base font-normal text-gray-400">USDC target</span>
-              </p>
-            )}
-            <button
-              onClick={handleDepositStake}
-              disabled={depositing || !program}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-purple-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-80 disabled:opacity-40"
-            >
-              {depositing ? (
-                <>
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                  Depositing...
-                </>
-              ) : (
-                "Deposit stake"
-              )}
-            </button>
+            <p className="mt-1 text-sm text-violet-700">
+              You completed your {totalMonths}-month commitment. Your full stake has been returned to your wallet.
+            </p>
           </div>
-        ) : user.isActive && !user.verifiedThisMonth ? (
-          <div className="rounded-2xl border border-amber-100 bg-amber-50 p-6 shadow-sm dark:border-amber-900/40 dark:bg-amber-950/30">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="font-semibold">Stake active</p>
-                <p className="mt-1 text-sm text-amber-700 dark:text-amber-400">
-                  Your deposit is locked in. Keep contributing to your FHSA — verification happens at month end.
-                </p>
-              </div>
-              <StatusBadge
-                label="Pending"
-                color="bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300"
-              />
+        ) : !user.isActive ? (
+          <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold text-gray-900">Not enrolled</p>
+              <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-500">Inactive</span>
             </div>
-            <div className="mt-5 rounded-xl bg-amber-100/60 px-4 py-3 dark:bg-amber-900/20">
-              <p className="text-xs text-amber-600 dark:text-amber-400">
-                Verification checks that you made your committed contribution to your FHSA this month.
-              </p>
+            <p className="mt-2 text-sm text-gray-400">
+              Your stake was forfeited. Start a new commitment to try again.
+            </p>
+          </div>
+        ) : !user.verifiedThisMonth ? (
+          <div className="rounded-2xl border border-amber-100 bg-amber-50 p-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold text-gray-900">This month</p>
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Pending</span>
             </div>
+            <p className="mt-1 text-sm text-amber-700">
+              Keep contributing to your FHSA. Verification runs at month end — miss it and your full stake is forfeited.
+            </p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-green-100 bg-green-50 p-6 shadow-sm dark:border-green-900/40 dark:bg-green-950/30">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="font-semibold">Verified this month</p>
-                <p className="mt-1 text-sm text-green-700 dark:text-green-400">
-                  Your contribution was confirmed.{" "}
-                  {user.hasClaimed
-                    ? "You've already claimed your pool share."
-                    : "Claim your share of the redistribution pool."}
-                </p>
-              </div>
-              <StatusBadge
-                label="Verified"
-                color="bg-green-100 text-green-700 dark:bg-green-900/60 dark:text-green-300"
-              />
+          <div className="rounded-2xl border border-green-100 bg-green-50 p-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold text-gray-900">This month</p>
+              <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">Verified</span>
             </div>
+            <p className="mt-1 text-sm text-green-700">
+              {user.hasClaimed
+                ? "You've already claimed your pool share."
+                : "Your contribution was confirmed. Claim your share of the redistribution pool."}
+            </p>
             {!user.hasClaimed && (
-              <button className="mt-5 w-full rounded-full bg-green-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-80">
+              <button className="mt-5 w-full rounded-full bg-green-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85">
                 Claim pool share
               </button>
             )}
           </div>
         )}
 
-        {/* Details */}
-        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950">
-          <p className="mb-3 text-sm font-medium text-gray-500">Account details</p>
-          <dl className="space-y-2 text-sm">
+        {/* Progress + details */}
+        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+          <p className="mb-4 text-xs font-semibold uppercase tracking-widest text-gray-400">Commitment progress</p>
+
+          {/* Progress bar */}
+          <div className="mb-4">
+            <div className="mb-1.5 flex justify-between text-xs text-gray-400">
+              <span>{monthsCompleted} of {totalMonths} months completed</span>
+              <span>{progressPct}%</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
+              <div
+                className="h-full rounded-full bg-violet-600 transition-all"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          </div>
+
+          <dl className="space-y-3 text-sm">
             <div className="flex justify-between">
               <dt className="text-gray-400">Monthly commitment</dt>
-              <dd className="font-medium">
-                {user.monthlyCommitment ? `$${user.monthlyCommitment.toLocaleString()} USDC` : "—"}
+              <dd className="font-semibold text-gray-900">
+                {user.monthlyCommitment ? `$${user.monthlyCommitment.toFixed(2)} USDC` : "—"}
               </dd>
             </div>
             <div className="flex justify-between">
+              <dt className="text-gray-400">Commitment period</dt>
+              <dd className="font-semibold text-gray-900">{totalMonths} months</dd>
+            </div>
+            <div className="flex justify-between">
               <dt className="text-gray-400">Streak</dt>
-              <dd className="font-medium">{user.streak} months</dd>
+              <dd className="font-semibold text-gray-900">{user.streak} {user.streak === 1 ? "month" : "months"}</dd>
             </div>
           </dl>
         </div>

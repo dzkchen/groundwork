@@ -32,24 +32,24 @@ export default function Home() {
     : null;
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-8 p-8">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-8 bg-white p-8">
       <div className="text-center">
-        <h1 className="text-4xl font-bold tracking-tight">Groundwork</h1>
-        <p className="mt-3 text-lg text-gray-500">
-          Savings accountability for your first home.
+        <h1 className="text-6xl font-bold tracking-tight text-gray-900">Groundwork</h1>
+        <p className="mt-4 text-xl text-gray-500">
+          Retake control of your FHSA with Solana Blockchain.
         </p>
       </div>
 
       {connected && publicKey ? (
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 dark:border-gray-700 dark:bg-gray-900">
-            <span className="h-2 w-2 rounded-full bg-green-500" />
-            <span className="font-mono text-sm">{addrShort}</span>
+        <div className="flex flex-col items-center gap-5">
+          <div className="flex items-center gap-2 rounded-full border border-gray-200 bg-white px-5 py-2.5">
+            <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
+            <span className="font-mono text-base text-gray-600">{addrShort}</span>
           </div>
           <button
             onClick={handleContinue}
             disabled={loading}
-            className="rounded-full bg-black px-8 py-3 text-base font-semibold text-white transition-opacity hover:opacity-80 disabled:opacity-50 dark:bg-white dark:text-black"
+            className="rounded-full bg-violet-700 px-10 py-4 text-base font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-50"
           >
             {loading ? "Loading..." : "Continue →"}
           </button>

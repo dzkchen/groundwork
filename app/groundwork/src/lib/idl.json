@@ -110,9 +110,10 @@
     {
       "name": "deposit_stake",
       "docs": [
-        "Transfers `amount` USDC from the user's ATA into their PDA vault and",
-        "initialises (or re-uses) their UserAccount for this month's commitment.",
-        "Rejects if the user already has an active deposit this month."
+        "Transfers the full lump-sum USDC stake from the user's ATA into their PDA",
+        "vault and initialises (or re-uses) their UserAccount.",
+        "`total_months` must be 3, 6, or 12.",
+        "`amount` should equal monthly_commitment × total_months (with USDC decimals)."
       ],
       "discriminator": [
         160,
@@ -201,14 +202,20 @@
         {
           "name": "amount",
           "type": "u64"
+        },
+        {
+          "name": "total_months",
+          "type": "u8"
         }
       ]
     },
     {
       "name": "forfeit_stake",
       "docs": [
-        "Callable only by AUTHORITY_PUBKEY. Resets the user's streak and transfers",
-        "vault balance to the shared pool (missed contribution)."
+        "Callable only by AUTHORITY_PUBKEY.",
+        "Forfeits only the current month's share (stake_amount / total_months) to",
+        "the pool. Keeps is_active: true — user stays enrolled, just penalised.",
+        "Resets streak to 0."
       ],
       "discriminator": [
         27,
@@ -529,8 +536,10 @@
     {
       "name": "release_stake",
       "docs": [
-        "Callable only by AUTHORITY_PUBKEY. Marks the stake verified, increments",
-        "the user's streak, and returns USDC to the user."
+        "Callable only by AUTHORITY_PUBKEY.",
+        "Returns one month's worth of stake (stake_amount / total_months) to the user.",
+        "Increments months_completed. If all months are done, emits Graduated and",
+        "sets is_active: false. Otherwise keeps is_active: true for next month."
       ],
       "discriminator": [
         51,
@@ -713,6 +722,21 @@
       ]
     }
   ],
+  "events": [
+    {
+      "name": "Graduated",
+      "discriminator": [
+        51,
+        241,
+        66,
+        50,
+        140,
+        245,
+        156,
+        192
+      ]
+    }
+  ],
   "errors": [
     {
       "code": 6000,
@@ -748,9 +772,30 @@
       "code": 6006,
       "name": "AlreadyClaimed",
       "msg": "User has already claimed their pool share this month"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidPeriod",
+      "msg": "Commitment period must be 3, 6, or 12 months"
     }
   ],
   "types": [
+    {
+      "name": "Graduated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_months",
+            "type": "u8"
+          }
+        ]
+      }
+    },
     {
       "name": "PoolState",
       "type": {
@@ -799,6 +844,14 @@
           {
             "name": "has_claimed",
             "type": "bool"
+          },
+          {
+            "name": "total_months",
+            "type": "u8"
+          },
+          {
+            "name": "months_completed",
+            "type": "u8"
           }
         ]
       }
