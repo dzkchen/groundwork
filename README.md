@@ -19,7 +19,7 @@ To be Made
 TLDR; Housing affordability in Canada remains a massive hurdle. Therefore, the Canadian government introduced the First Home Savings Account (FHSA), allowing contributions with tax-deductible deposits and tax-free withdrawals.
 
 Despite this being one of the most powerful financial tools available to young Canadians, the follow-through is shockingly low:
-* **Awareness is lacking:** A BMO investment survey revealed that 2/3rds of Canadians lack knowledge about the FHSA. 
+* **Awareness is lacking:** [A BMO investment survey](https://newsroom.bmo.com/2023-12-07-BMO-Investment-Survey-Over-Half-of-Canadian-First-Time-Homebuyers-Likely-to-Use-First-Home-Savings-Accounts,-but-Many-Unaware-of-its-Features-and-Benefits) revealed that 2/3rds of Canadians lack knowledge about the FHSA. 
 * **Adoption is slow:** While roughly a million Canadians have opened an account, this represents a very small fraction of the estimated 4.5 million renters in the country.
 * **Contributions are falling drastically short:** Even among those who open an account, the average FHSA balance sits at just $3,899 as of late 2025. Meaning most are missing out on thousands of dollars in tax-deductible contribution room each year.
 
