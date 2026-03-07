@@ -23,6 +23,7 @@ pub mod groundwork {
     /// initialises (or re-uses) their UserAccount for this month's commitment.
     /// Rejects if the user already has an active deposit this month.
     pub fn deposit_stake(mut ctx: Context<DepositStake>, amount: u64) -> Result<()> {
+        require!(amount > 0, GroundworkError::InvalidAmount);
         require!(
             !ctx.accounts.user_account.is_active,
             GroundworkError::AlreadyActive
@@ -453,6 +454,8 @@ pub struct PoolState {
 
 #[error_code]
 pub enum GroundworkError {
+    #[msg("Stake amount must be greater than zero")]
+    InvalidAmount,
     #[msg("Caller is not the program authority")]
     Unauthorized,
     #[msg("Vault is empty — nothing to forfeit")]

@@ -202,10 +202,6 @@
         {
           "name": "amount",
           "type": "u64"
-        },
-        {
-          "name": "total_months",
-          "type": "u8"
         }
       ]
     },

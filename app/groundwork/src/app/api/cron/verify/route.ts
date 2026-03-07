@@ -185,6 +185,8 @@ async function processUser(
       end_date: endDate,
       options: { count: 500, offset: 0 },
     });
+    // TODO(production): Detect FHSA contributions specifically (e.g. by category or
+    // merchant), not just any transaction >= commitment. See docs/PRODUCTION.md.
     verified = resp.data.transactions.some(
       (t) => t.amount >= user.monthlyCommitment
     );
@@ -253,6 +255,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Reset last month's count first so this run's verified count is correct.
+  // Verified users from this run can then claim_pool_share until the next cron.
+  try {
+    await callResetMonth(program, authority);
+  } catch (e) {
+    return NextResponse.json(
+      { error: `reset_month failed: ${String(e)}` },
+      { status: 500 }
+    );
+  }
+
   const snapshot = await getDb()
     .collection("users")
     .where("isActive", "==", true)
@@ -276,18 +289,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  try {
-    await callResetMonth(program, authority);
-  } catch (e) {
-    errors.push(`reset_month: ${String(e)}`);
-  }
-
   return NextResponse.json({ verified, forfeited, errors });
 }
 
-// ─── GET — dev trigger for a single wallet ────────────────────────────────────
+// ─── GET — dev-only trigger for a single wallet (disabled in production) ───────
 
 export async function GET(req: NextRequest) {
+  if (process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const wallet = req.nextUrl.searchParams.get("wallet");
   const result = req.nextUrl.searchParams.get("result") as
     | "verified"

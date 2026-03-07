@@ -142,9 +142,10 @@ export default function OnboardPage() {
       );
       const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, publicKey);
 
+      // Program accepts only amount (lump sum). totalMonths stored in Firebase.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (program.methods as any)
-        .depositStake(lumpSum, totalMonths)
+        .depositStake(lumpSum)
         .accounts({
           user: publicKey,
           userAccount: userAccountPda,
