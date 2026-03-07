@@ -38,6 +38,9 @@ export default function Home() {
         <p className="mt-4 text-xl text-gray-500">
           Retake control of your FHSA with Solana Blockchain.
         </p>
+        <p className="mt-6 max-w-md mx-auto text-sm text-gray-400">
+          You’ll need: a Solana wallet (e.g. Phantom) with some SOL and USDC, and a Canadian bank account to connect via Plaid.
+        </p>
       </div>
 
       {connected && publicKey ? (

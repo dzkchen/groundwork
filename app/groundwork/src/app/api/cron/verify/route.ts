@@ -2,8 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase";
 import { getPlaidClient } from "@/lib/plaid";
 import { FieldValue } from "firebase-admin/firestore";
-import { Keypair, Connection, PublicKey, SystemProgram } from "@solana/web3.js";
-import { AnchorProvider, Wallet, Program } from "@coral-xyz/anchor";
+import {
+  Keypair,
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  VersionedTransaction,
+} from "@solana/web3.js";
+import { AnchorProvider, Program } from "@coral-xyz/anchor";
 import type { Idl } from "@coral-xyz/anchor";
 import {
   TOKEN_PROGRAM_ID,
@@ -15,6 +22,31 @@ import idl from "@/lib/idl.json";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Wallet adapter from Keypair (Anchor's Wallet export is missing in ESM build). */
+function keypairAsWallet(payer: Keypair) {
+  return {
+    publicKey: payer.publicKey,
+    signTransaction: async (tx: Transaction | VersionedTransaction) => {
+      if (tx instanceof VersionedTransaction) {
+        tx.sign([payer]);
+      } else {
+        tx.partialSign(payer);
+      }
+      return tx;
+    },
+    signAllTransactions: async (txs: (Transaction | VersionedTransaction)[]) => {
+      return txs.map((tx) => {
+        if (tx instanceof VersionedTransaction) {
+          tx.sign([payer]);
+        } else {
+          tx.partialSign(payer);
+        }
+        return tx;
+      });
+    },
+  };
+}
+
 function buildProgram(): { program: Program; authority: Keypair } {
   const keyArray = JSON.parse(process.env.AUTHORITY_PRIVATE_KEY!);
   const authority = Keypair.fromSecretKey(Uint8Array.from(keyArray));
@@ -22,7 +54,7 @@ function buildProgram(): { program: Program; authority: Keypair } {
     process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com",
     "confirmed"
   );
-  const provider = new AnchorProvider(connection, new Wallet(authority), {
+  const provider = new AnchorProvider(connection, keypairAsWallet(authority) as never, {
     commitment: "confirmed",
   });
   return { program: new Program(idl as Idl, provider), authority };
@@ -232,8 +264,19 @@ async function processUser(
 
 // ─── POST — full cron job ─────────────────────────────────────────────────────
 
+function isCronAuthorized(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  const header = req.headers.get("x-cron-secret");
+  const bearer = req.headers.get("authorization");
+  return (
+    header === secret ||
+    (bearer != null && bearer === `Bearer ${secret}`)
+  );
+}
+
 export async function POST(req: NextRequest) {
-  if (req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
+  if (!isCronAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
