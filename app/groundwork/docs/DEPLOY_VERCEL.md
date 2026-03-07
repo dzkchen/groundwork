@@ -28,9 +28,10 @@ In the Vercel project: **Settings → Environment Variables**. Add these for **P
 | `NEXT_PUBLIC_SOLANA_RPC` | Yes | Same as above (used by cron) |
 | `NEXT_PUBLIC_USDC_MINT` | Yes | USDC mint address (mainnet or devnet) |
 | `AUTHORITY_PRIVATE_KEY` | Yes | JSON array of 64 bytes, e.g. `[1,2,...]` |
+| `FEE_PAYER_PRIVATE_KEY` | Yes | JSON array of 64 bytes. Keypair that pays SOL for user txns (deposit/claim). Keep this wallet funded with a little SOL so users never need SOL. |
 | `CRON_SECRET` | Yes | Random string (e.g. `openssl rand -hex 32`). Used by Vercel Cron as Bearer token. |
 
-- **No spaces** in `AUTHORITY_PRIVATE_KEY` (paste the raw JSON array).
+- **No spaces** in `AUTHORITY_PRIVATE_KEY` or `FEE_PAYER_PRIVATE_KEY` (paste the raw JSON array).
 - For **Firebase private key**: paste the key from the JSON; in Vercel you can keep real newlines or use `\n` in one line.
 
 ---
@@ -57,9 +58,7 @@ The repo includes **`vercel.json`** with a cron that hits `/api/cron/verify` on 
 
 Each user needs:
 
-1. **A Solana wallet** (e.g. Phantom) with:
-   - **Some SOL** – to pay transaction fees (e.g. deposit stake, claim pool share). A small amount (e.g. 0.01–0.05 SOL) is enough.
-   - **Enough USDC** – to cover their stake for the chosen plan (50 / 60 / 80 USDC for 12 / 6 / 3 months).
+1. **A Solana wallet** (e.g. Phantom) with **enough USDC** for their stake (50 / 60 / 80 USDC for 12 / 6 / 3 months). The app pays transaction fees (via `FEE_PAYER_PRIVATE_KEY`), so users do **not** need SOL.
 
 2. **A Canadian bank (or supported institution)** – to connect via Plaid so the app can verify FHSA contributions. They complete the Plaid Link flow in the app.
 

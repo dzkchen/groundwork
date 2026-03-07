@@ -2,19 +2,14 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useWallet, useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { usePlaidLink } from "react-plaid-link";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
-import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import type { Idl } from "@coral-xyz/anchor";
-import idl from "@/lib/idl.json";
+import { Transaction } from "@solana/web3.js";
 
 type Step = 1 | 2 | 3 | 4;
 
 const FHSA_MONTHLY_MAX = 667;
 
-// One-time stake per tier — paid upfront, returned in full at graduation
 const PERIODS = [
   { months: 3,  label: "Starter",   description: "3 months",  stake: 80 },
   { months: 6,  label: "Committed", description: "6 months",  stake: 60 },
@@ -22,8 +17,7 @@ const PERIODS = [
 ] as const;
 
 export default function OnboardPage() {
-  const { publicKey } = useWallet();
-  const anchorWallet = useAnchorWallet();
+  const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
   const router = useRouter();
 
@@ -38,11 +32,6 @@ export default function OnboardPage() {
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [linkTokenLoading, setLinkTokenLoading] = useState(false);
 
-  const program = useMemo(() => {
-    if (!anchorWallet) return null;
-    const provider = new AnchorProvider(connection, anchorWallet, { commitment: "confirmed" });
-    return new Program(idl as Idl, provider);
-  }, [anchorWallet, connection]);
 
   const suggestedSavings =
     monthlyIncome && monthlyExpenses
@@ -59,7 +48,6 @@ export default function OnboardPage() {
   const selectedPeriod = PERIODS.find((p) => p.months === totalMonths)!;
   const totalStake = selectedPeriod.stake;
 
-  // Fetch Plaid link token when entering step 4
   useEffect(() => {
     if (step !== 4 || linkToken || linkTokenLoading) return;
     setLinkTokenLoading(true);
@@ -108,7 +96,7 @@ export default function OnboardPage() {
   }
 
   async function handleFinish() {
-    if (!publicKey || !program) return;
+    if (!publicKey || !signTransaction) return;
     setSubmitting(true);
     setError("");
     try {
@@ -125,39 +113,24 @@ export default function OnboardPage() {
       });
       if (!onboardRes.ok) throw new Error("Failed to save profile");
 
-      // 2. Deposit lump sum on-chain
-      const usdcMintAddr = process.env.NEXT_PUBLIC_USDC_MINT;
-      if (!usdcMintAddr) throw new Error("USDC mint not configured");
+      const relayRes = await fetch("/api/relay/deposit-stake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: publicKey.toBase58(), amount: totalStake }),
+      });
+      if (!relayRes.ok) {
+        const data = await relayRes.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to prepare deposit");
+      }
+      const { transaction: txBase64 } = await relayRes.json();
+      const tx = Transaction.from(Buffer.from(txBase64, "base64"));
+      const signed = await signTransaction(tx);
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        preflightCommitment: "confirmed",
+      });
+      await connection.confirmTransaction(sig, "confirmed");
 
-      const usdcMint = new PublicKey(usdcMintAddr);
-      const lumpSum = new BN(totalStake * 1_000_000);
-
-      const [userAccountPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("user_account"), publicKey.toBuffer()],
-        program.programId
-      );
-      const [vaultPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("vault"), publicKey.toBuffer()],
-        program.programId
-      );
-      const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, publicKey);
-
-      // Program accepts only amount (lump sum). totalMonths stored in Firebase.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (program.methods as any)
-        .depositStake(lumpSum)
-        .accounts({
-          user: publicKey,
-          userAccount: userAccountPda,
-          vault: vaultPda,
-          userUsdcAta,
-          usdcMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-
-      // 3. Mark isActive in Firebase
       await fetch(`/api/user/${publicKey.toBase58()}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -188,7 +161,6 @@ export default function OnboardPage() {
           ))}
         </div>
 
-        {/* Step 1 — Budget */}
         {step === 1 && (
           <div className="flex flex-col gap-6">
             <div>
@@ -254,7 +226,6 @@ export default function OnboardPage() {
           </div>
         )}
 
-        {/* Step 2 — Monthly amount */}
         {step === 2 && (
           <div className="flex flex-col gap-6">
             <div>
@@ -298,7 +269,7 @@ export default function OnboardPage() {
           </div>
         )}
 
-        {/* Step 3 — Commitment period */}
+
         {step === 3 && (
           <div className="flex flex-col gap-6">
             <div>
@@ -363,7 +334,6 @@ export default function OnboardPage() {
           </div>
         )}
 
-        {/* Step 4 — Bank + deposit */}
         {step === 4 && (
           <div className="flex flex-col gap-6">
             <div>
@@ -373,7 +343,6 @@ export default function OnboardPage() {
               </p>
             </div>
 
-            {/* Bank connection */}
             {bankConnected ? (
               <div className="flex items-center gap-3 rounded-xl border border-green-100 bg-green-50 px-4 py-3">
                 <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-green-500 text-sm text-white">✓</span>
@@ -396,7 +365,6 @@ export default function OnboardPage() {
               </button>
             )}
 
-            {/* Stake summary */}
             <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm">
               <div className="flex justify-between text-gray-500">
                 <span>Period</span>
@@ -419,7 +387,7 @@ export default function OnboardPage() {
                 Back
               </button>
               <button
-                disabled={submitting || !bankConnected || !program}
+                disabled={submitting || !bankConnected || !signTransaction}
                 onClick={handleFinish}
                 className="flex-1 rounded-full bg-violet-700 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-30"
               >

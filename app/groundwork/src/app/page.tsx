@@ -39,7 +39,7 @@ export default function Home() {
           Retake control of your FHSA with Solana Blockchain.
         </p>
         <p className="mt-6 max-w-md mx-auto text-sm text-gray-400">
-          You’ll need: a Solana wallet (e.g. Phantom) with some SOL and USDC, and a Canadian bank account to connect via Plaid.
+          You’ll need: a Solana wallet (e.g. Phantom) and USDC for your stake. We pay transaction fees — no SOL required. Plus a Canadian bank account to connect via Plaid.
         </p>
       </div>
 

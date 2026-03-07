@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { Transaction } from "@solana/web3.js";
 
 interface UserData {
   walletAddress: string;
@@ -21,7 +22,8 @@ interface UserData {
 type Toast = { type: "success" | "error"; message: string };
 
 export default function DashboardPage() {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signTransaction } = useWallet();
+  const { connection } = useConnection();
   const router = useRouter();
 
   const [user, setUser] = useState<UserData | null>(null);
@@ -54,8 +56,40 @@ export default function DashboardPage() {
     fetchUser(publicKey.toBase58()).finally(() => setLoading(false));
   }, [connected, publicKey, router, fetchUser]);
 
-  // showToast is used for future claim flow; suppress unused warning
-  void showToast;
+  const [claiming, setClaiming] = useState(false);
+
+  const handleClaimPoolShare = useCallback(async () => {
+    if (!publicKey || !signTransaction) return;
+    setClaiming(true);
+    try {
+      const res = await fetch("/api/relay/claim-pool-share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: publicKey.toBase58() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to prepare claim");
+      }
+      const { transaction: txBase64 } = await res.json();
+      const tx = Transaction.from(Buffer.from(txBase64, "base64"));
+      const signed = await signTransaction(tx);
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        preflightCommitment: "confirmed",
+      });
+      await connection.confirmTransaction(sig, "confirmed");
+      showToast({ type: "success", message: "Pool share claimed!" });
+      await fetchUser(publicKey.toBase58());
+    } catch (e) {
+      showToast({
+        type: "error",
+        message: e instanceof Error ? e.message : "Claim failed",
+      });
+    } finally {
+      setClaiming(false);
+    }
+  }, [publicKey, signTransaction, connection, fetchUser]);
 
   if (loading) {
     return (
@@ -154,8 +188,12 @@ export default function DashboardPage() {
                 : "Your contribution was confirmed. Claim your share of the redistribution pool."}
             </p>
             {!user.hasClaimed && (
-              <button className="mt-5 w-full rounded-full bg-green-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85">
-                Claim pool share
+              <button
+                onClick={handleClaimPoolShare}
+                disabled={claiming}
+                className="mt-5 w-full rounded-full bg-green-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-50"
+              >
+                {claiming ? "Claiming…" : "Claim pool share"}
               </button>
             )}
           </div>
