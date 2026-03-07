@@ -4,8 +4,7 @@ import { FieldValue } from "firebase-admin/firestore";
 
 export async function POST(req: NextRequest) {
   try {
-    const { walletAddress, monthlyBudget, commitmentAmount } =
-      await req.json();
+    const { walletAddress, fhsaProvider, monthlyCommitment } = await req.json();
 
     if (!walletAddress) {
       return NextResponse.json(
@@ -15,24 +14,24 @@ export async function POST(req: NextRequest) {
     }
 
     const ref = getDb().collection("users").doc(walletAddress);
-    const existing = await ref.get();
 
-    if (existing.exists) {
-      return NextResponse.json({ exists: true, walletAddress }, { status: 200 });
-    }
+    await ref.set(
+      {
+        walletAddress,
+        fhsaProvider: fhsaProvider ?? null,
+        monthlyCommitment: monthlyCommitment ?? null,
+        // plaidAccessToken is intentionally NOT set here so merge:true
+        // preserves any value already written by /api/plaid/exchange-token
+        streak: 0,
+        isActive: false,
+        verifiedThisMonth: false,
+        hasClaimed: false,
+        createdAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
-    await ref.set({
-      walletAddress,
-      monthlyBudget: monthlyBudget ?? null,
-      commitmentAmount: commitmentAmount ?? null,
-      streak: 0,
-      isActive: false,
-      verifiedThisMonth: false,
-      hasClaimed: false,
-      createdAt: FieldValue.serverTimestamp(),
-    });
-
-    return NextResponse.json({ created: true, walletAddress }, { status: 201 });
+    return NextResponse.json({ success: true, walletAddress }, { status: 200 });
   } catch (err) {
     console.error("POST /api/onboard:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

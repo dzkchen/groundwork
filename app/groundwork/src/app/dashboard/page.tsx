@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useWallet, useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
+import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import type { Idl } from "@coral-xyz/anchor";
+import idl from "@/lib/idl.json";
 
 interface UserData {
   walletAddress: string;
@@ -11,48 +16,116 @@ interface UserData {
   isActive: boolean;
   verifiedThisMonth: boolean;
   hasClaimed: boolean;
-  commitmentAmount: number | null;
-  provider: string | null;
+  monthlyCommitment: number | null;
+  fhsaProvider: string | null;
 }
+
+type Toast = { type: "success" | "error"; message: string };
 
 function StatusBadge({ label, color }: { label: string; color: string }) {
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${color}`}
-    >
+    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${color}`}>
       {label}
     </span>
   );
 }
 
 export default function DashboardPage() {
-  const { publicKey, connected, disconnect } = useWallet();
+  const { publicKey, connected } = useWallet();
+  const anchorWallet = useAnchorWallet();
+  const { connection } = useConnection();
   const router = useRouter();
 
   const [user, setUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [depositing, setDepositing] = useState(false);
+  const [toast, setToast] = useState<Toast | null>(null);
+
+  const showToast = useCallback((t: Toast) => {
+    setToast(t);
+    setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  const fetchUser = useCallback(
+    async (wallet: string) => {
+      const res = await fetch(`/api/user/${wallet}`);
+      if (res.status === 404) {
+        router.push("/onboard");
+        return;
+      }
+      const data = await res.json();
+      if (data?.user) setUser(data.user as UserData);
+    },
+    [router]
+  );
 
   useEffect(() => {
     if (!connected || !publicKey) {
       router.push("/");
       return;
     }
+    fetchUser(publicKey.toBase58()).finally(() => setLoading(false));
+  }, [connected, publicKey, router, fetchUser]);
 
-    const wallet = publicKey.toBase58();
-    fetch(`/api/user/${wallet}`)
-      .then((res) => {
-        if (res.status === 404) {
-          router.push("/onboard");
-          return null;
-        }
-        return res.json();
-      })
-      .then((data) => {
-        if (data?.user) setUser(data.user as UserData);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [connected, publicKey, router]);
+  const program = useMemo(() => {
+    if (!anchorWallet) return null;
+    const provider = new AnchorProvider(connection, anchorWallet, { commitment: "confirmed" });
+    return new Program(idl as Idl, provider);
+  }, [anchorWallet, connection]);
+
+  async function handleDepositStake() {
+    if (!publicKey || !program || !user?.monthlyCommitment) return;
+
+    const usdcMintAddr = process.env.NEXT_PUBLIC_USDC_MINT;
+    if (!usdcMintAddr) {
+      showToast({ type: "error", message: "USDC mint not configured." });
+      return;
+    }
+
+    setDepositing(true);
+    try {
+      const usdcMint = new PublicKey(usdcMintAddr);
+      const amount = new BN(user.monthlyCommitment * 1_000_000);
+
+      const [userAccountPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("user_account"), publicKey.toBuffer()],
+        program.programId
+      );
+      const [vaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vault"), publicKey.toBuffer()],
+        program.programId
+      );
+      const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, publicKey);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (program.methods as any)
+        .depositStake(amount)
+        .accounts({
+          user: publicKey,
+          userAccount: userAccountPda,
+          vault: vaultPda,
+          userUsdcAta,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      await fetch(`/api/user/${publicKey.toBase58()}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: true }),
+      });
+
+      showToast({ type: "success", message: "Stake deposited!" });
+      await fetchUser(publicKey.toBase58());
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Transaction failed";
+      showToast({ type: "error", message: msg.slice(0, 120) });
+    } finally {
+      setDepositing(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -70,6 +143,17 @@ export default function DashboardPage() {
 
   return (
     <main className="flex min-h-screen flex-col items-center p-8">
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full px-5 py-3 text-sm font-semibold text-white shadow-lg ${
+            toast.type === "success" ? "bg-green-600" : "bg-red-600"
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+
       {/* Header */}
       <header className="flex w-full max-w-lg items-center justify-between pb-8">
         <span className="text-xl font-bold">Groundwork</span>
@@ -102,12 +186,11 @@ export default function DashboardPage() {
 
         {/* State card */}
         {!user.isActive ? (
-          // State 1: No active deposit
           <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-950">
             <div className="flex items-start justify-between">
               <div>
-                <p className="font-semibold">This month's commitment</p>
-                <p className="mt-1 text-gray-500 text-sm">
+                <p className="font-semibold">This month&apos;s commitment</p>
+                <p className="mt-1 text-sm text-gray-500">
                   No active stake. Deposit USDC to lock in your commitment.
                 </p>
               </div>
@@ -116,18 +199,28 @@ export default function DashboardPage() {
                 color="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
               />
             </div>
-            {user.commitmentAmount && (
+            {user.monthlyCommitment && (
               <p className="mt-4 text-3xl font-bold">
-                ${(user.commitmentAmount / 1_000_000).toLocaleString()}{" "}
+                ${user.monthlyCommitment.toLocaleString()}{" "}
                 <span className="text-base font-normal text-gray-400">USDC target</span>
               </p>
             )}
-            <button className="mt-5 w-full rounded-full bg-black py-3 text-sm font-semibold text-white transition-opacity hover:opacity-80 dark:bg-white dark:text-black">
-              Deposit stake
+            <button
+              onClick={handleDepositStake}
+              disabled={depositing || !program}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-purple-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-80 disabled:opacity-40"
+            >
+              {depositing ? (
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  Depositing...
+                </>
+              ) : (
+                "Deposit stake"
+              )}
             </button>
           </div>
         ) : user.isActive && !user.verifiedThisMonth ? (
-          // State 2: Active, waiting for verification
           <div className="rounded-2xl border border-amber-100 bg-amber-50 p-6 shadow-sm dark:border-amber-900/40 dark:bg-amber-950/30">
             <div className="flex items-start justify-between">
               <div>
@@ -148,7 +241,6 @@ export default function DashboardPage() {
             </div>
           </div>
         ) : (
-          // State 3: Verified — can claim pool share
           <div className="rounded-2xl border border-green-100 bg-green-50 p-6 shadow-sm dark:border-green-900/40 dark:bg-green-950/30">
             <div className="flex items-start justify-between">
               <div>
@@ -166,7 +258,7 @@ export default function DashboardPage() {
               />
             </div>
             {!user.hasClaimed && (
-              <button className="mt-5 w-full rounded-full bg-green-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-80 dark:bg-green-500">
+              <button className="mt-5 w-full rounded-full bg-green-600 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-80">
                 Claim pool share
               </button>
             )}
@@ -178,15 +270,9 @@ export default function DashboardPage() {
           <p className="mb-3 text-sm font-medium text-gray-500">Account details</p>
           <dl className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <dt className="text-gray-400">FHSA provider</dt>
-              <dd className="font-medium">{user.provider ?? "—"}</dd>
-            </div>
-            <div className="flex justify-between">
               <dt className="text-gray-400">Monthly commitment</dt>
               <dd className="font-medium">
-                {user.commitmentAmount
-                  ? `$${(user.commitmentAmount / 1_000_000).toLocaleString()} USDC`
-                  : "—"}
+                {user.monthlyCommitment ? `$${user.monthlyCommitment.toLocaleString()} USDC` : "—"}
               </dd>
             </div>
             <div className="flex justify-between">

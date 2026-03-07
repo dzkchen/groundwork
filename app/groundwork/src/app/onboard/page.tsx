@@ -93,8 +93,7 @@ export default function OnboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           walletAddress: publicKey.toBase58(),
-          monthlyBudget: Number(monthlyIncome) - Number(monthlyExpenses),
-          commitmentAmount: Number(commitmentAmount),
+          monthlyCommitment: Number(commitmentAmount),
         }),
       });
       if (!res.ok) throw new Error();
