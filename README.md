@@ -1,7 +1,9 @@
 
 # Ground Work
 
-Ground Work is a decentralized application (dApp) designed to incentivize users to actively contribute to their First Home Savings Account (FHSA). By leveraging the speed and low fees of the Solana blockchain, users stake USDC in a shared pool alongside a group of peers.
+Ground Work is a decentralized application (dApp) designed to incentivize users to actively contribute to their First Home Savings Account (FHSA). By leveraging the speed and low fees of the Solana blockchain, users stake USDC in a shared pool alongside a group of peers. 
+
+Created for the Hack Canada hackathon, this project aims to solve real problems Canadians face by transforming how they approach saving for their first property.
 
 
 ![Ground Work Logo](./ground_work_logo.png)
