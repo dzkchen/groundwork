@@ -1,11 +1,15 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token::{self, Mint, Token, TokenAccount, Transfer},
+    token_interface::{mint_to, MintTo, Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount, TokenInterface},
+};
 
 declare_id!("3y5dGx98G2jZ7STFqHoaxzsX9PRYPFdfTPBqnVanXJL3");
 
-/// Hardcoded program authority — only this key can call release_stake.
-/// Generated deterministically from seed "groundwork-authority" for local testing.
-/// Replace with your real authority pubkey before mainnet deployment.
+/// Hardcoded program authority — replace before mainnet deployment.
+/// Generated deterministically from seed "groundwork-authority":
+///   pubkey: QVxt9ixFYpSbo44f8qR8hmSLnSJchzTQCCWJG1pCu2c
 const AUTHORITY_PUBKEY: Pubkey = Pubkey::new_from_array([
     6, 5, 27, 147, 157, 238, 108, 216, 95, 122, 148, 143, 20, 89, 29, 105, 117, 83, 2, 94, 242,
     207, 234, 208, 52, 122, 236, 171, 152, 17, 160, 149,
@@ -15,14 +19,23 @@ const AUTHORITY_PUBKEY: Pubkey = Pubkey::new_from_array([
 pub mod groundwork {
     use super::*;
 
-    /// Transfers `amount` of USDC from the user's ATA into a PDA vault and
-    /// initialises a UserAccount recording the deposit.
+    /// Transfers `amount` USDC from the user's ATA into their PDA vault and
+    /// initialises (or re-uses) their UserAccount for this month's commitment.
+    /// Rejects if the user already has an active deposit this month.
     pub fn deposit_stake(mut ctx: Context<DepositStake>, amount: u64) -> Result<()> {
-        let accs = &mut ctx.accounts;
+        require!(
+            !ctx.accounts.user_account.is_active,
+            GroundworkError::AlreadyActive
+        );
 
+        let accs = &mut ctx.accounts;
         accs.user_account.wallet = accs.user.key();
         accs.user_account.stake_amount = amount;
         accs.user_account.verified = false;
+        accs.user_account.is_active = true;
+        accs.user_account.has_claimed = false;
+        accs.user_account.month_start = Clock::get()?.unix_timestamp;
+        // streak is preserved across months — incremented on release, reset on forfeit
 
         token::transfer(
             CpiContext::new(
@@ -39,16 +52,27 @@ pub mod groundwork {
         Ok(())
     }
 
-    /// Callable only by AUTHORITY_PUBKEY. Marks the stake as verified and
-    /// returns the USDC from the vault back to the user's ATA.
+    /// Creates the shared USDC pool token account and PoolState metadata account.
+    /// The COMMIT mint must already exist with pool_state PDA as its mint authority.
+    /// Callable once by the authority at program setup.
+    pub fn initialize_pool(ctx: Context<InitializePool>) -> Result<()> {
+        ctx.accounts.pool_state.commit_mint = ctx.accounts.commit_mint.key();
+        ctx.accounts.pool_state.verified_users_this_month = 0;
+        Ok(())
+    }
+
+    /// Callable only by AUTHORITY_PUBKEY. Marks the stake verified, increments
+    /// the user's streak, and returns USDC to the user.
     pub fn release_stake(ctx: Context<ReleaseStake>) -> Result<()> {
         let stake_amount = ctx.accounts.user_account.stake_amount;
         let user_key = ctx.accounts.user.key();
         let bump = ctx.bumps.user_account;
 
         ctx.accounts.user_account.verified = true;
+        ctx.accounts.user_account.is_active = false;
+        ctx.accounts.user_account.streak += 1;
+        ctx.accounts.pool_state.verified_users_this_month += 1;
 
-        // Sign the CPI with the user_account PDA (which is the vault's authority).
         let seeds: &[&[u8]] = &[b"user_account", user_key.as_ref(), &[bump]];
         let signer = &[seeds];
 
@@ -67,6 +91,122 @@ pub mod groundwork {
 
         Ok(())
     }
+
+    /// Callable only by AUTHORITY_PUBKEY. Resets the user's streak and transfers
+    /// vault balance to the shared pool (missed contribution).
+    pub fn forfeit_stake(ctx: Context<ForfeitStake>) -> Result<()> {
+        let amount = ctx.accounts.vault.amount;
+        require!(amount > 0, GroundworkError::VaultEmpty);
+
+        ctx.accounts.user_account.streak = 0;
+        ctx.accounts.user_account.is_active = false;
+
+        let user_key = ctx.accounts.user.key();
+        let bump = ctx.bumps.user_account;
+        let seeds: &[&[u8]] = &[b"user_account", user_key.as_ref(), &[bump]];
+        let signer = &[seeds];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.pool.to_account_info(),
+                    authority: ctx.accounts.user_account.to_account_info(),
+                },
+                signer,
+            ),
+            amount,
+        )?;
+
+        Ok(())
+    }
+
+    /// Callable only by AUTHORITY_PUBKEY. Mints COMMIT tokens (Token-2022) to
+    /// a user's associated token account based on their current streak.
+    /// Streak multipliers: 1-2 → 100, 3-5 → 150, 6-11 → 200, 12-23 → 300, 24+ → 400
+    pub fn mint_commit(
+        ctx: Context<MintCommit>,
+        _user_pubkey: Pubkey,
+        streak: u32,
+    ) -> Result<()> {
+        let tokens: u64 = match streak {
+            1..=2 => 100,
+            3..=5 => 150,
+            6..=11 => 200,
+            12..=23 => 300,
+            _ => 400,
+        };
+
+        let bump = ctx.bumps.pool_state;
+        let seeds: &[&[u8]] = &[b"pool_state", &[bump]];
+        let signer = &[seeds];
+
+        mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.to_account_info(),
+                MintTo {
+                    mint: ctx.accounts.commit_mint.to_account_info(),
+                    to: ctx.accounts.user_commit_ata.to_account_info(),
+                    authority: ctx.accounts.pool_state.to_account_info(),
+                },
+                signer,
+            ),
+            tokens,
+        )?;
+
+        Ok(())
+    }
+
+    /// Callable by any verified user. Transfers their proportional share of the
+    /// USDC pool (pool_balance / verified_users_this_month) to their ATA.
+    pub fn claim_pool_share(ctx: Context<ClaimPoolShare>) -> Result<()> {
+        require!(
+            !ctx.accounts.user_account.has_claimed,
+            GroundworkError::AlreadyClaimed
+        );
+        require!(
+            ctx.accounts.user_account.verified,
+            GroundworkError::NotVerified
+        );
+
+        let verified = ctx.accounts.pool_state.verified_users_this_month;
+        require!(verified > 0, GroundworkError::NoVerifiedUsers);
+
+        let pool_balance = ctx.accounts.pool.amount;
+        require!(pool_balance > 0, GroundworkError::EmptyPool);
+
+        let share = pool_balance / verified as u64;
+        require!(share > 0, GroundworkError::EmptyPool);
+
+        let pool_bump = ctx.bumps.pool;
+        let seeds: &[&[u8]] = &[b"pool", &[pool_bump]];
+        let signer = &[seeds];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.pool.to_account_info(),
+                    to: ctx.accounts.user_usdc_ata.to_account_info(),
+                    authority: ctx.accounts.pool.to_account_info(),
+                },
+                signer,
+            ),
+            share,
+        )?;
+
+        ctx.accounts.user_account.has_claimed = true;
+
+        Ok(())
+    }
+
+    /// Callable only by AUTHORITY_PUBKEY. Resets verified_users_this_month to 0
+    /// at the start of each new month.
+    pub fn reset_month(ctx: Context<ResetMonth>) -> Result<()> {
+        ctx.accounts.pool_state.verified_users_this_month = 0;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -78,9 +218,8 @@ pub struct DepositStake<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    /// PDA that records the user's stake state.
     #[account(
-        init,
+        init_if_needed,
         payer = user,
         space = 8 + UserAccount::INIT_SPACE,
         seeds = [b"user_account", user.key().as_ref()],
@@ -88,10 +227,8 @@ pub struct DepositStake<'info> {
     )]
     pub user_account: Account<'info, UserAccount>,
 
-    /// PDA token account that holds the staked USDC.
-    /// Owned by user_account so only the program can move tokens out.
     #[account(
-        init,
+        init_if_needed,
         payer = user,
         token::mint = usdc_mint,
         token::authority = user_account,
@@ -100,7 +237,6 @@ pub struct DepositStake<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
 
-    /// User's USDC associated token account (source of funds).
     #[account(mut)]
     pub user_usdc_ata: Account<'info, TokenAccount>,
 
@@ -110,8 +246,41 @@ pub struct DepositStake<'info> {
 }
 
 #[derive(Accounts)]
+pub struct InitializePool<'info> {
+    #[account(mut, address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    /// Shared USDC pool. Self-custodied: the pool PDA is its own token authority,
+    /// so future withdrawals sign with seeds [b"pool", bump].
+    #[account(
+        init,
+        payer = authority,
+        token::mint = usdc_mint,
+        token::authority = pool,
+        seeds = [b"pool"],
+        bump,
+    )]
+    pub pool: Account<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + PoolState::INIT_SPACE,
+        seeds = [b"pool_state"],
+        bump,
+    )]
+    pub pool_state: Account<'info, PoolState>,
+
+    /// Token-2022 COMMIT mint — must already exist with pool_state as mint authority.
+    pub commit_mint: InterfaceAccount<'info, InterfaceMint>,
+
+    pub usdc_mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ReleaseStake<'info> {
-    /// Must match AUTHORITY_PUBKEY — enforced by the `address` constraint.
     #[account(address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
     pub authority: Signer<'info>,
 
@@ -132,11 +301,127 @@ pub struct ReleaseStake<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
 
-    /// User's USDC ATA — receives the returned tokens.
+    #[account(mut)]
+    pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"pool_state"],
+        bump,
+    )]
+    pub pool_state: Account<'info, PoolState>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct ForfeitStake<'info> {
+    #[account(address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: used only for PDA seed derivation; not read or written.
+    pub user: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"user_account", user.key().as_ref()],
+        bump,
+    )]
+    pub user_account: Account<'info, UserAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", user.key().as_ref()],
+        bump,
+    )]
+    pub vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"pool"],
+        bump,
+    )]
+    pub pool: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct MintCommit<'info> {
+    #[account(mut, address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"pool_state"],
+        bump,
+    )]
+    pub pool_state: Account<'info, PoolState>,
+
+    #[account(
+        mut,
+        address = pool_state.commit_mint,
+    )]
+    pub commit_mint: InterfaceAccount<'info, InterfaceMint>,
+
+    /// CHECK: used only for ATA derivation.
+    pub user: UncheckedAccount<'info>,
+
+    #[account(
+        init_if_needed,
+        payer = authority,
+        associated_token::mint = commit_mint,
+        associated_token::authority = user,
+        associated_token::token_program = token_2022_program,
+    )]
+    pub user_commit_ata: InterfaceAccount<'info, InterfaceTokenAccount>,
+
+    pub token_2022_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimPoolShare<'info> {
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"user_account", user.key().as_ref()],
+        bump,
+    )]
+    pub user_account: Account<'info, UserAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"pool"],
+        bump,
+    )]
+    pub pool: Account<'info, TokenAccount>,
+
+    #[account(
+        seeds = [b"pool_state"],
+        bump,
+    )]
+    pub pool_state: Account<'info, PoolState>,
+
     #[account(mut)]
     pub user_usdc_ata: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct ResetMonth<'info> {
+    #[account(address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"pool_state"],
+        bump,
+    )]
+    pub pool_state: Account<'info, PoolState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +434,17 @@ pub struct UserAccount {
     pub wallet: Pubkey,
     pub stake_amount: u64,
     pub verified: bool,
+    pub streak: u32,
+    pub month_start: i64,
+    pub is_active: bool,
+    pub has_claimed: bool,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct PoolState {
+    pub commit_mint: Pubkey,
+    pub verified_users_this_month: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,4 +455,16 @@ pub struct UserAccount {
 pub enum GroundworkError {
     #[msg("Caller is not the program authority")]
     Unauthorized,
+    #[msg("Vault is empty — nothing to forfeit")]
+    VaultEmpty,
+    #[msg("User already has an active deposit this month")]
+    AlreadyActive,
+    #[msg("User has not been verified this month")]
+    NotVerified,
+    #[msg("No verified users this month — cannot distribute")]
+    NoVerifiedUsers,
+    #[msg("Pool is empty — nothing to claim")]
+    EmptyPool,
+    #[msg("User has already claimed their pool share this month")]
+    AlreadyClaimed,
 }
