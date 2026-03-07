@@ -39,6 +39,12 @@ pub mod groundwork {
         Ok(())
     }
 
+    /// Creates the shared pool token account. Must be called once by the
+    /// authority before any forfeit_stake calls.
+    pub fn initialize_pool(_ctx: Context<InitializePool>) -> Result<()> {
+        Ok(())
+    }
+
     /// Callable only by AUTHORITY_PUBKEY. Marks the stake as verified and
     /// returns the USDC from the vault back to the user's ATA.
     pub fn release_stake(ctx: Context<ReleaseStake>) -> Result<()> {
@@ -63,6 +69,33 @@ pub mod groundwork {
                 signer,
             ),
             stake_amount,
+        )?;
+
+        Ok(())
+    }
+
+    /// Callable only by AUTHORITY_PUBKEY. Transfers the vault balance to the
+    /// shared pool instead of returning it to the user (missed contribution).
+    pub fn forfeit_stake(ctx: Context<ForfeitStake>) -> Result<()> {
+        let amount = ctx.accounts.vault.amount;
+        require!(amount > 0, GroundworkError::VaultEmpty);
+
+        let user_key = ctx.accounts.user.key();
+        let bump = ctx.bumps.user_account;
+        let seeds: &[&[u8]] = &[b"user_account", user_key.as_ref(), &[bump]];
+        let signer = &[seeds];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.pool.to_account_info(),
+                    authority: ctx.accounts.user_account.to_account_info(),
+                },
+                signer,
+            ),
+            amount,
         )?;
 
         Ok(())
@@ -139,6 +172,61 @@ pub struct ReleaseStake<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
+pub struct InitializePool<'info> {
+    #[account(mut, address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    /// Shared pool token account. The pool PDA is its own token authority so
+    /// the program can sign future withdrawals with seeds [b"pool", bump].
+    #[account(
+        init,
+        payer = authority,
+        token::mint = usdc_mint,
+        token::authority = pool,
+        seeds = [b"pool"],
+        bump,
+    )]
+    pub pool: Account<'info, TokenAccount>,
+
+    pub usdc_mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ForfeitStake<'info> {
+    #[account(address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: used only for PDA seed derivation; not read or written.
+    pub user: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"user_account", user.key().as_ref()],
+        bump,
+    )]
+    pub user_account: Account<'info, UserAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", user.key().as_ref()],
+        bump,
+    )]
+    pub vault: Account<'info, TokenAccount>,
+
+    /// Shared pool — receives forfeited funds.
+    #[account(
+        mut,
+        seeds = [b"pool"],
+        bump,
+    )]
+    pub pool: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -159,4 +247,6 @@ pub struct UserAccount {
 pub enum GroundworkError {
     #[msg("Caller is not the program authority")]
     Unauthorized,
+    #[msg("Vault is empty — nothing to forfeit")]
+    VaultEmpty,
 }
