@@ -1,18 +1,19 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import { Program, BN } from "@coral-xyz/anchor";
 import {
   createMint,
   createAssociatedTokenAccount,
   mintTo,
   getAccount,
+  getAssociatedTokenAddressSync,
+  TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
 import { Groundwork } from "../target/types/groundwork";
 
 // ---------------------------------------------------------------------------
 // Authority keypair — matches AUTHORITY_PUBKEY hardcoded in the program.
-// Derived from seed "groundwork-authority" (32 bytes), pubkey:
-//   QVxt9ixFYpSbo44f8qR8hmSLnSJchzTQCCWJG1pCu2c
+// pubkey: QVxt9ixFYpSbo44f8qR8hmSLnSJchzTQCCWJG1pCu2c
 // ---------------------------------------------------------------------------
 const AUTHORITY_SECRET = Uint8Array.from([
   103, 114, 111, 117, 110, 100, 119, 111, 114, 107, 45, 97, 117, 116, 104,
@@ -22,211 +23,383 @@ const AUTHORITY_SECRET = Uint8Array.from([
   149,
 ]);
 
+const RPC = { skipPreflight: true, commitment: "confirmed" } as const;
+const STAKE = new BN(40_000_000); // 40 USDC
+const MINT_AMOUNT = 200_000_000; // 200 USDC per user
+
 describe("groundwork", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.Groundwork as Program<Groundwork>;
-  const connection = provider.connection;
+  const conn = provider.connection;
   const payer = (provider.wallet as anchor.Wallet).payer;
-
   const authority = anchor.web3.Keypair.fromSecretKey(AUTHORITY_SECRET);
 
-  // user1 — for deposit + release tests
+  // user1 — streak + re-deposit + COMMIT tests
   const user1 = anchor.web3.Keypair.generate();
-  // user2 — for deposit + forfeit tests
+  // user2 (forfeiter) + user3 (claimer) — pool redistribution tests
   const user2 = anchor.web3.Keypair.generate();
-
-  const STAKE_AMOUNT = new anchor.BN(40_000_000); // 40 USDC (6 decimals)
-  const MINT_AMOUNT = 100_000_000; // 100 USDC
+  const user3 = anchor.web3.Keypair.generate();
 
   let usdcMint: anchor.web3.PublicKey;
+  let commitMint: anchor.web3.PublicKey; // Token-2022
 
   let user1UsdcAta: anchor.web3.PublicKey;
-  let user1Account: anchor.web3.PublicKey;
-  let vault1: anchor.web3.PublicKey;
-
   let user2UsdcAta: anchor.web3.PublicKey;
-  let user2Account: anchor.web3.PublicKey;
-  let vault2: anchor.web3.PublicKey;
+  let user3UsdcAta: anchor.web3.PublicKey;
 
+  // PDAs (derived once, reused throughout)
+  let user1Account: anchor.web3.PublicKey;
   let pool: anchor.web3.PublicKey;
+  let poolState: anchor.web3.PublicKey;
 
-  /** Airdrop-confirms using a fresh blockhash to avoid expiry on localnet. */
   async function airdrop(pubkey: anchor.web3.PublicKey, lamports: number) {
-    const sig = await connection.requestAirdrop(pubkey, lamports);
+    const sig = await conn.requestAirdrop(pubkey, lamports);
     const { blockhash, lastValidBlockHeight } =
-      await connection.getLatestBlockhash("confirmed");
-    await connection.confirmTransaction(
+      await conn.getLatestBlockhash("confirmed");
+    await conn.confirmTransaction(
       { signature: sig, blockhash, lastValidBlockHeight },
       "confirmed"
     );
   }
 
+  function pda(seeds: Buffer[]) {
+    return anchor.web3.PublicKey.findProgramAddressSync(
+      seeds,
+      program.programId
+    )[0];
+  }
+
   before("bootstrap", async () => {
-    // Give the freshly-started localnet validator a moment to stabilise.
     await new Promise((r) => setTimeout(r, 2000));
 
-    for (const kp of [authority, user1, user2]) {
+    for (const kp of [authority, user1, user2, user3]) {
       await airdrop(kp.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
     }
 
-    usdcMint = await createMint(connection, payer, payer.publicKey, null, 6);
+    // Standard USDC mock mint
+    usdcMint = await createMint(conn, payer, payer.publicKey, null, 6);
 
-    // Fund both users with 100 USDC each
+    // Derive pool_state PDA before creating the COMMIT mint — it will be the mint authority
+    poolState = pda([Buffer.from("pool_state")]);
+
+    // Token-2022 COMMIT mint — mint authority = pool_state PDA, 0 decimals
+    commitMint = await createMint(
+      conn,
+      payer,
+      poolState,   // mint authority
+      null,        // freeze authority
+      0,           // decimals
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    // Fund each user with USDC
     for (const [kp, setter] of [
       [user1, (v: anchor.web3.PublicKey) => (user1UsdcAta = v)],
       [user2, (v: anchor.web3.PublicKey) => (user2UsdcAta = v)],
+      [user3, (v: anchor.web3.PublicKey) => (user3UsdcAta = v)],
     ] as const) {
       const ata = await createAssociatedTokenAccount(
-        connection,
-        payer,
-        usdcMint,
-        kp.publicKey
+        conn, payer, usdcMint, kp.publicKey
       );
-      await mintTo(connection, payer, usdcMint, ata, payer, MINT_AMOUNT);
+      await mintTo(conn, payer, usdcMint, ata, payer, MINT_AMOUNT);
       setter(ata);
     }
 
-    // Derive all PDAs
-    [user1Account] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("user_account"), user1.publicKey.toBuffer()],
-      program.programId
-    );
-    [vault1] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("vault"), user1.publicKey.toBuffer()],
-      program.programId
-    );
-    [user2Account] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("user_account"), user2.publicKey.toBuffer()],
-      program.programId
-    );
-    [vault2] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("vault"), user2.publicKey.toBuffer()],
-      program.programId
-    );
-    [pool] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("pool")],
-      program.programId
-    );
+    // Derive PDAs used in assertions
+    user1Account = pda([Buffer.from("user_account"), user1.publicKey.toBuffer()]);
+    pool         = pda([Buffer.from("pool")]);
   });
 
   // ---------------------------------------------------------------------------
   // initialize_pool
   // ---------------------------------------------------------------------------
 
-  it("initialize_pool: creates the shared pool account", async () => {
+  it("initialize_pool: creates pool + pool_state, stores commit_mint", async () => {
     await program.methods
       .initializePool()
-      .accounts({ usdcMint })
+      .accounts({ usdcMint, commitMint })
       .signers([authority])
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
+      .rpc(RPC);
 
-    const poolInfo = await getAccount(connection, pool);
+    const ps = await program.account.poolState.fetch(poolState);
+    assert.equal(ps.commitMint.toBase58(), commitMint.toBase58(), "commitMint stored");
+    assert.equal(ps.verifiedUsersThisMonth, 0, "verifiedUsersThisMonth starts at 0");
+
+    const poolInfo = await getAccount(conn, pool);
     assert.equal(Number(poolInfo.amount), 0, "pool starts empty");
-    assert.equal(
-      poolInfo.mint.toBase58(),
-      usdcMint.toBase58(),
-      "pool uses USDC mint"
-    );
   });
 
   // ---------------------------------------------------------------------------
-  // deposit_stake + release_stake (user1)
+  // Streak tracking
   // ---------------------------------------------------------------------------
 
-  it("deposit_stake: initialises UserAccount and moves 40 USDC into vault", async () => {
+  it("streak: starts at 0 on first deposit", async () => {
     await program.methods
-      .depositStake(STAKE_AMOUNT)
-      .accounts({
-        user: user1.publicKey,
-        userUsdcAta: user1UsdcAta,
-        usdcMint,
-      })
+      .depositStake(STAKE)
+      .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta, usdcMint })
       .signers([user1])
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
+      .rpc(RPC);
 
     const ua = await program.account.userAccount.fetch(user1Account);
-    assert.equal(ua.wallet.toBase58(), user1.publicKey.toBase58(), "wallet");
-    assert.equal(ua.stakeAmount.toNumber(), STAKE_AMOUNT.toNumber(), "stakeAmount");
-    assert.equal(ua.verified, false, "verified = false after deposit");
-
-    const vaultInfo = await getAccount(connection, vault1);
-    assert.equal(Number(vaultInfo.amount), STAKE_AMOUNT.toNumber(), "vault holds 40 USDC");
-
-    const userInfo = await getAccount(connection, user1UsdcAta);
-    assert.equal(
-      Number(userInfo.amount),
-      MINT_AMOUNT - STAKE_AMOUNT.toNumber(),
-      "user ATA debited by 40 USDC"
-    );
+    assert.equal(ua.streak, 0, "streak = 0 before any release");
+    assert.equal(ua.isActive, true, "is_active = true after deposit");
+    assert.notEqual(ua.monthStart.toNumber(), 0, "month_start set");
   });
 
-  it("release_stake: flips verified=true and returns 40 USDC to user", async () => {
-    const balBefore = (await getAccount(connection, user1UsdcAta)).amount;
+  it("streak: increments to 1 after release_stake", async () => {
+    await program.methods
+      .releaseStake()
+      .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta })
+      .signers([authority])
+      .rpc(RPC);
+
+    const ua = await program.account.userAccount.fetch(user1Account);
+    assert.equal(ua.streak, 1, "streak = 1 after first release");
+    assert.equal(ua.isActive, false, "is_active = false after release");
+    assert.equal(ua.verified, true);
+  });
+
+  it("streak: increments to 2 after second deposit + release", async () => {
+    // Re-deposit (is_active is now false)
+    await program.methods
+      .depositStake(STAKE)
+      .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta, usdcMint })
+      .signers([user1])
+      .rpc(RPC);
 
     await program.methods
       .releaseStake()
-      .accounts({
-        user: user1.publicKey,
-        userUsdcAta: user1UsdcAta,
-      })
+      .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta })
       .signers([authority])
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
+      .rpc(RPC);
 
     const ua = await program.account.userAccount.fetch(user1Account);
-    assert.equal(ua.verified, true, "verified = true after release");
-
-    const balAfter = (await getAccount(connection, user1UsdcAta)).amount;
-    assert.equal(Number(balAfter - balBefore), STAKE_AMOUNT.toNumber(), "40 USDC returned");
-
-    const vaultInfo = await getAccount(connection, vault1);
-    assert.equal(Number(vaultInfo.amount), 0, "vault drained");
+    assert.equal(ua.streak, 2, "streak = 2 after second release");
   });
 
-  // ---------------------------------------------------------------------------
-  // deposit_stake + forfeit_stake (user2)
-  // ---------------------------------------------------------------------------
-
-  it("deposit_stake (user2): deposits 40 USDC into vault2", async () => {
+  it("streak: resets to 0 after forfeit_stake", async () => {
+    // Deposit a third time
     await program.methods
-      .depositStake(STAKE_AMOUNT)
-      .accounts({
-        user: user2.publicKey,
-        userUsdcAta: user2UsdcAta,
-        usdcMint,
-      })
-      .signers([user2])
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
+      .depositStake(STAKE)
+      .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta, usdcMint })
+      .signers([user1])
+      .rpc(RPC);
 
-    const vaultInfo = await getAccount(connection, vault2);
-    assert.equal(Number(vaultInfo.amount), STAKE_AMOUNT.toNumber(), "vault2 holds 40 USDC");
+    await program.methods
+      .forfeitStake()
+      .accounts({ user: user1.publicKey })
+      .signers([authority])
+      .rpc(RPC);
+
+    const ua = await program.account.userAccount.fetch(user1Account);
+    assert.equal(ua.streak, 0, "streak = 0 after forfeit");
+    assert.equal(ua.isActive, false, "is_active = false after forfeit");
   });
 
-  it("forfeit_stake: transfers vault balance to pool, user2 receives nothing", async () => {
-    const poolBalBefore = (await getAccount(connection, pool)).amount;
-    const user2BalBefore = (await getAccount(connection, user2UsdcAta)).amount;
+  // ---------------------------------------------------------------------------
+  // Re-deposit
+  // ---------------------------------------------------------------------------
+
+  it("re-deposit: works after settlement (is_active = false)", async () => {
+    // user1's streak was just reset; is_active = false — deposit should succeed
+    await program.methods
+      .depositStake(STAKE)
+      .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta, usdcMint })
+      .signers([user1])
+      .rpc(RPC);
+
+    const ua = await program.account.userAccount.fetch(user1Account);
+    assert.equal(ua.isActive, true, "is_active = true after re-deposit");
+  });
+
+  it("re-deposit: rejected mid-month when is_active = true", async () => {
+    // user1 is currently active (just deposited above)
+    try {
+      await program.methods
+        .depositStake(STAKE)
+        .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta, usdcMint })
+        .signers([user1])
+        .rpc();
+      assert.fail("expected AlreadyActive error");
+    } catch (err: any) {
+      assert.ok(
+        err.message.includes("AlreadyActive") ||
+          err.error?.errorCode?.code === "AlreadyActive",
+        `unexpected error: ${err.message}`
+      );
+    }
+    // Clean up: release so user1 is settled for subsequent tests
+    await program.methods
+      .releaseStake()
+      .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta })
+      .signers([authority])
+      .rpc(RPC);
+  });
+
+  // ---------------------------------------------------------------------------
+  // COMMIT token minting (Token-2022)
+  // ---------------------------------------------------------------------------
+
+  async function commitBalance(user: anchor.web3.PublicKey): Promise<bigint> {
+    const ata = getAssociatedTokenAddressSync(
+      commitMint, user, false, TOKEN_2022_PROGRAM_ID
+    );
+    const info = await getAccount(conn, ata, "confirmed", TOKEN_2022_PROGRAM_ID);
+    return info.amount;
+  }
+
+  /** Explicit Token-2022 ATA address — Anchor can't auto-resolve cross-program ATAs. */
+  function commitAta(user: anchor.web3.PublicKey) {
+    return getAssociatedTokenAddressSync(
+      commitMint, user, false, TOKEN_2022_PROGRAM_ID
+    );
+  }
+
+  it("mint_commit: streak 1-2 → 100 tokens", async () => {
+    await program.methods
+      .mintCommit(user1.publicKey, 1)
+      .accountsPartial({ user: user1.publicKey, commitMint, userCommitAta: commitAta(user1.publicKey), token2022Program: TOKEN_2022_PROGRAM_ID })
+      .signers([authority])
+      .rpc(RPC);
+
+    assert.equal(Number(await commitBalance(user1.publicKey)), 100);
+  });
+
+  it("mint_commit: streak 3-5 → 150 tokens", async () => {
+    await program.methods
+      .mintCommit(user1.publicKey, 3)
+      .accountsPartial({ user: user1.publicKey, commitMint, userCommitAta: commitAta(user1.publicKey), token2022Program: TOKEN_2022_PROGRAM_ID })
+      .signers([authority])
+      .rpc(RPC);
+
+    assert.equal(Number(await commitBalance(user1.publicKey)), 250); // 100 + 150
+  });
+
+  it("mint_commit: streak 6-11 → 200 tokens", async () => {
+    await program.methods
+      .mintCommit(user1.publicKey, 6)
+      .accountsPartial({ user: user1.publicKey, commitMint, userCommitAta: commitAta(user1.publicKey), token2022Program: TOKEN_2022_PROGRAM_ID })
+      .signers([authority])
+      .rpc(RPC);
+
+    assert.equal(Number(await commitBalance(user1.publicKey)), 450); // + 200
+  });
+
+  it("mint_commit: streak 12-23 → 300 tokens", async () => {
+    await program.methods
+      .mintCommit(user1.publicKey, 12)
+      .accountsPartial({ user: user1.publicKey, commitMint, userCommitAta: commitAta(user1.publicKey), token2022Program: TOKEN_2022_PROGRAM_ID })
+      .signers([authority])
+      .rpc(RPC);
+
+    assert.equal(Number(await commitBalance(user1.publicKey)), 750); // + 300
+  });
+
+  it("mint_commit: streak 24+ → 400 tokens", async () => {
+    await program.methods
+      .mintCommit(user1.publicKey, 24)
+      .accountsPartial({ user: user1.publicKey, commitMint, userCommitAta: commitAta(user1.publicKey), token2022Program: TOKEN_2022_PROGRAM_ID })
+      .signers([authority])
+      .rpc(RPC);
+
+    assert.equal(Number(await commitBalance(user1.publicKey)), 1150); // + 400
+  });
+
+  // ---------------------------------------------------------------------------
+  // Pool redistribution
+  // ---------------------------------------------------------------------------
+
+  it("reset_month: sets verifiedUsersThisMonth to 0", async () => {
+    // Accumulated releases from streak tests — reset before pool tests
+    await program.methods
+      .resetMonth()
+      .accounts({})
+      .signers([authority])
+      .rpc(RPC);
+
+    const ps = await program.account.poolState.fetch(poolState);
+    assert.equal(ps.verifiedUsersThisMonth, 0);
+  });
+
+  it("pool redistribution: forfeited user's stake flows to verified user", async () => {
+    // user2 deposits and forfeits — 40 USDC goes to pool
+    await program.methods
+      .depositStake(STAKE)
+      .accounts({ user: user2.publicKey, userUsdcAta: user2UsdcAta, usdcMint })
+      .signers([user2])
+      .rpc(RPC);
 
     await program.methods
       .forfeitStake()
       .accounts({ user: user2.publicKey })
       .signers([authority])
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
+      .rpc(RPC);
 
-    // Pool received the forfeited tokens
-    const poolBalAfter = (await getAccount(connection, pool)).amount;
+    // user3 deposits and releases — verified_users_this_month becomes 1
+    await program.methods
+      .depositStake(STAKE)
+      .accounts({ user: user3.publicKey, userUsdcAta: user3UsdcAta, usdcMint })
+      .signers([user3])
+      .rpc(RPC);
+
+    await program.methods
+      .releaseStake()
+      .accounts({ user: user3.publicKey, userUsdcAta: user3UsdcAta })
+      .signers([authority])
+      .rpc(RPC);
+
+    const ps = await program.account.poolState.fetch(poolState);
+    assert.equal(ps.verifiedUsersThisMonth, 1, "one verified user this month");
+
+    const poolBalBefore = (await getAccount(conn, pool)).amount;
+    const user3BalBefore = (await getAccount(conn, user3UsdcAta)).amount;
+
+    // user3 claims their proportional share: pool_balance / 1 = 40 USDC
+    await program.methods
+      .claimPoolShare()
+      .accounts({ user: user3.publicKey, userUsdcAta: user3UsdcAta })
+      .signers([user3])
+      .rpc(RPC);
+
+    const user3BalAfter = (await getAccount(conn, user3UsdcAta)).amount;
+    const poolBalAfter = (await getAccount(conn, pool)).amount;
+
     assert.equal(
-      Number(poolBalAfter - poolBalBefore),
-      STAKE_AMOUNT.toNumber(),
-      "pool received 40 USDC"
+      Number(user3BalAfter - user3BalBefore),
+      Number(poolBalBefore),
+      "user3 received the full pool (user2's forfeited 40 USDC)"
     );
+    assert.equal(Number(poolBalAfter), 0, "pool drained");
 
-    // User2's ATA is unchanged
-    const user2BalAfter = (await getAccount(connection, user2UsdcAta)).amount;
-    assert.equal(user2BalAfter, user2BalBefore, "user2 received nothing");
+    // Verify has_claimed was set
+    const ua = await program.account.userAccount.fetch(
+      anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from("user_account"), user3.publicKey.toBuffer()],
+        program.programId
+      )[0]
+    );
+    assert.equal(ua.hasClaimed, true, "has_claimed = true after first claim");
+  });
 
-    // Vault2 is drained
-    const vaultInfo = await getAccount(connection, vault2);
-    assert.equal(Number(vaultInfo.amount), 0, "vault2 drained");
+  it("claim_pool_share: rejects double-claim with AlreadyClaimed", async () => {
+    // user3 already claimed above — a second call must be rejected
+    try {
+      await program.methods
+        .claimPoolShare()
+        .accounts({ user: user3.publicKey, userUsdcAta: user3UsdcAta })
+        .signers([user3])
+        .rpc();
+      assert.fail("expected AlreadyClaimed error");
+    } catch (err: any) {
+      assert.ok(
+        err.message.includes("AlreadyClaimed") ||
+          err.error?.errorCode?.code === "AlreadyClaimed",
+        `unexpected error: ${err.message}`
+      );
+    }
   });
 });
