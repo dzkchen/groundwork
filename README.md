@@ -30,12 +30,12 @@ Despite this being one of the most powerful financial tools available to young C
 
 The mechanism is simple: make your real-world FHSA contribution within the designated timeframe to secure your stake and earn a share of the forfeited funds from those who miss the deadline. It turns personal finance into a socially accountable, high-reward system.
 
-1. **Form a Pool:** Users can choose their level of accountability. You can either invite friends to create a private group or join a public lobby to be matched with other savers.
-2. **Stake on Solana:** Each user deposits a predetermined amount of USDC into a secure Solana smart contract. Using a stablecoin ensures that the pool's value is protected from crypto market volatility while funds are locked.
-3. **The Race to Save:** Participants are given a strict timeframe to make a qualifying fiat contribution to their actual FHSA.
-4. **Verification:** Ground Work securely connects to traditional financial institutions via Bank APIs (Plaid) to verify the real-world FHSA contribution receipt or transaction data.
-
-5. **Settlement:** ***Success:** Users who successfully verify their FHSA contribution receive their original USDC stake back, plus a proportional share of the forfeited funds from users who failed to contribute. ***Failure:** Users who miss the deadline forfeit their staked USDC, which is automatically distributed to the successful savers in their pool.
+1. **Wallet Connection:** Users connects their wallet of choosing (only supporting phantom wallet as of now), this allows us to use the Solana block chain as a middle man to hold each user's stake securely and safely
+2. **Onboarding:** The user is put into an onboarding process where we provide suggestions on monthly contributions based on monthly income and expenses. A minimum contribution of $50 is required to prevent misuse.
+3. **Matchmaking:** The user can choose to either participate on ground work against either friends or randoms (based on monthly contribution). As of now, this part is not in effect and needs updates/fixes.
+4. **Connection:** Now the user is almost there! Ground Work securely connects to traditional financial institutions via Bank APIs (Plaid) to verify the real-world FHSA contribution receipt or transaction data. A $50 USDC stake is required. USDC is used here due to it's relative stability within the realm of cryptocurrency.
+5. **The Race to Save:** Participants are now need to make a qualifying fiat contribution to their actual FHSA.
+6. **Settlement:** ***Success:** Users who successfully verify their FHSA contribution receive their original USDC stake back, plus a proportional share of the forfeited funds from users who failed to contribute. ***Failure:** Users who miss the deadline forfeit their staked USDC, which is automatically distributed to the successful savers in their pool.
 
 ## Tech Stack
 
