@@ -12,7 +12,7 @@ Created for the Hack Canada hackathon, this project aims to solve real problems 
 
 ## Demo
 
-To be Made
+[Watch the Site Demonstration Demo Here!](https://drive.google.com/file/d/1P_9YvxYcF9iGzqnLOwDzYXYAx8A5CJnD/view?usp=sharing)
 
 ## Reasoning
 
