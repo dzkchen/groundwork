@@ -107,7 +107,6 @@ export default function DashboardPage() {
 
   return (
     <main className="flex min-h-screen flex-col items-center bg-white p-8">
-      {/* Toast */}
       {toast && (
         <div
           className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full px-5 py-3 text-sm font-semibold text-white shadow-lg ${
@@ -118,14 +117,12 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Header */}
       <header className="flex w-full max-w-md items-center justify-between pb-8">
         <span className="text-lg font-bold tracking-tight text-gray-900">Groundwork</span>
         <WalletMultiButton />
       </header>
 
       <div className="w-full max-w-md space-y-4">
-        {/* Streak card */}
         <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">Current streak</p>
           <p className="mt-2 text-5xl font-bold text-gray-900">
@@ -135,17 +132,16 @@ export default function DashboardPage() {
           {user.streak >= 3 && (
             <p className="mt-2 text-xs font-medium text-violet-600">
               {user.streak >= 24
-                ? "24+ month tier — 400 COMMIT / month"
+                ? "24+ month tier: 400 COMMIT / month"
                 : user.streak >= 12
-                ? "12–23 month tier — 300 COMMIT / month"
+                ? "12–23 month tier: 300 COMMIT / month"
                 : user.streak >= 6
-                ? "6–11 month tier — 200 COMMIT / month"
-                : "3–5 month tier — 150 COMMIT / month"}
+                ? "6–11 month tier: 200 COMMIT / month"
+                : "3–5 month tier: 150 COMMIT / month"}
             </p>
           )}
         </div>
 
-        {/* Status card */}
         {user.graduated ? (
           <div className="rounded-2xl border border-violet-200 bg-violet-50 p-6 shadow-sm">
             <div className="flex items-center justify-between">
@@ -173,7 +169,7 @@ export default function DashboardPage() {
               <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Pending</span>
             </div>
             <p className="mt-1 text-sm text-amber-700">
-              Keep contributing to your FHSA. Verification runs at month end — miss it and your full stake is forfeited.
+              Keep contributing to your FHSA. Verification runs at month end. Miss it and your full stake is forfeited.
             </p>
           </div>
         ) : (
@@ -199,11 +195,9 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Progress + details */}
         <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
           <p className="mb-4 text-xs font-semibold uppercase tracking-widest text-gray-400">Commitment progress</p>
 
-          {/* Progress bar */}
           <div className="mb-4">
             <div className="mb-1.5 flex justify-between text-xs text-gray-400">
               <span>{monthsCompleted} of {totalMonths} months completed</span>
@@ -221,7 +215,7 @@ export default function DashboardPage() {
             <div className="flex justify-between">
               <dt className="text-gray-400">Monthly commitment</dt>
               <dd className="font-semibold text-gray-900">
-                {user.monthlyCommitment ? `$${user.monthlyCommitment.toFixed(2)} USDC` : "—"}
+                {user.monthlyCommitment ? `$${user.monthlyCommitment.toFixed(2)} USDC` : "–"}
               </dd>
             </div>
             <div className="flex justify-between">

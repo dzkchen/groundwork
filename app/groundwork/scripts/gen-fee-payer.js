@@ -1,9 +1,4 @@
 #!/usr/bin/env node
-/**
- * Generate a keypair for FEE_PAYER_PRIVATE_KEY. Run from app/groundwork:
- *   node scripts/gen-fee-payer.js
- * Then add the output to .env.local and fund the printed address with a little SOL (devnet faucet or mainnet).
- */
 const { Keypair } = require("@solana/web3.js");
 
 const kp = Keypair.generate();

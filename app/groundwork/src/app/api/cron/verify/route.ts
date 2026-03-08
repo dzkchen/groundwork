@@ -20,9 +20,6 @@ import {
 } from "@solana/spl-token";
 import idl from "@/lib/idl.json";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Wallet adapter from Keypair (Anchor's Wallet export is missing in ESM build). */
 function keypairAsWallet(payer: Keypair) {
   return {
     publicKey: payer.publicKey,
@@ -82,7 +79,6 @@ async function getCommitMint(program: Program): Promise<PublicKey> {
     [Buffer.from("pool_state")],
     program.programId
   );
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const state = await (program.account as any).poolState.fetch(poolStatePda);
   return state.commitMint as PublicKey;
 }
@@ -96,7 +92,6 @@ async function callReleaseStake(
   const { userAccount, vault, poolState } = pdas(userPubkey, program.programId);
   const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, userPubkey);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (program.methods as any)
     .releaseStake()
     .accounts({
@@ -126,7 +121,6 @@ async function callMintCommit(
     TOKEN_2022_PROGRAM_ID
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (program.methods as any)
     .mintCommit(userPubkey, streak)
     .accounts({
@@ -149,7 +143,6 @@ async function callForfeitStake(
 ) {
   const { userAccount, vault, pool } = pdas(userPubkey, program.programId);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (program.methods as any)
     .forfeitStake()
     .accounts({
@@ -169,7 +162,6 @@ async function callResetMonth(program: Program, authority: Keypair) {
     program.programId
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (program.methods as any)
     .resetMonth()
     .accounts({ authority: authority.publicKey, poolState })
@@ -185,8 +177,6 @@ function plaidDateRange(): { startDate: string; endDate: string } {
     endDate: now.toISOString().slice(0, 10),
   };
 }
-
-// ─── Core per-user processing ─────────────────────────────────────────────────
 
 interface UserDoc {
   walletAddress: string;
@@ -217,8 +207,6 @@ async function processUser(
       end_date: endDate,
       options: { count: 500, offset: 0 },
     });
-    // TODO(production): Detect FHSA contributions specifically (e.g. by category or
-    // merchant), not just any transaction >= commitment. See docs/PRODUCTION.md.
     verified = resp.data.transactions.some(
       (t) => t.amount >= user.monthlyCommitment
     );
@@ -229,12 +217,9 @@ async function processUser(
   const graduated = verified && newMonthsCompleted >= user.totalMonths;
 
   if (verified) {
-    // Only release the stake on-chain at graduation (final month).
-    // For intermediate months the vault stays locked — no on-chain action needed.
     if (graduated) {
       await callReleaseStake(program, authority, userPubkey, usdcMint);
     }
-    // Mint COMMIT tokens every verified month based on new streak.
     await callMintCommit(program, authority, userPubkey, commitMint, user.streak + 1);
     await getDb()
       .collection("users")
@@ -247,7 +232,6 @@ async function processUser(
         graduated: graduated ? true : false,
       });
   } else {
-    // User missed a month — forfeit entire vault to pool and kick them out.
     await callForfeitStake(program, authority, userPubkey);
     await getDb()
       .collection("users")
@@ -261,8 +245,6 @@ async function processUser(
 
   return verified ? "verified" : "forfeited";
 }
-
-// ─── POST — full cron job ─────────────────────────────────────────────────────
 
 function isCronAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -298,8 +280,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Reset last month's count first so this run's verified count is correct.
-  // Verified users from this run can then claim_pool_share until the next cron.
   try {
     await callResetMonth(program, authority);
   } catch (e) {
@@ -334,8 +314,6 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ verified, forfeited, errors });
 }
-
-// ─── GET — dev-only trigger for a single wallet (disabled in production) ───────
 
 export async function GET(req: NextRequest) {
   if (process.env.NODE_ENV === "production") {

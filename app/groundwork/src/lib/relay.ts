@@ -70,7 +70,6 @@ export function pdas(userPubkey: PublicKey) {
   return { userAccount, pool, poolState };
 }
 
-/** Build a transaction with fee payer set and signed; returns base64 for client to add user sig and send. */
 export async function buildSponsoredTx(
   connection: Connection,
   feePayer: Keypair,
@@ -97,9 +96,8 @@ export async function buildDepositStakeTx(userWallet: string, amountUsdc: number
     PROGRAM_ID
   );
   const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, userPubkey);
-  const lumpSum = new BN(amountUsdc * 1_000_000); // USDC 6 decimals
+  const lumpSum = new BN(amountUsdc * 1_000_000);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ix = await (program.methods as any)
     .depositStake(lumpSum)
     .accounts({
@@ -124,7 +122,6 @@ export async function buildClaimPoolShareTx(userWallet: string): Promise<string>
   const { userAccount, pool, poolState } = pdas(userPubkey);
   const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, userPubkey);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ix = await (program.methods as any)
     .claimPoolShare()
     .accounts({

@@ -17,7 +17,6 @@ body {
   font-family: var(--font-montserrat), "Montserrat", sans-serif;
 }
 
-/* ── Wallet adapter overrides ───────────────────────────── */
 .wallet-adapter-button {
   background-color: #7c3aed !important;
   border-radius: 9999px !important;
@@ -52,7 +51,6 @@ body {
   color: #7c3aed !important;
 }
 
-/* Hide "Change wallet" from WalletMultiButton dropdown */
 .wallet-adapter-dropdown-list-item:nth-child(2) {
   display: none !important;
 }

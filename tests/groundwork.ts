@@ -11,10 +11,6 @@ import {
 import { assert } from "chai";
 import { Groundwork } from "../target/types/groundwork";
 
-// ---------------------------------------------------------------------------
-// Authority keypair — matches AUTHORITY_PUBKEY hardcoded in the program.
-// pubkey: QVxt9ixFYpSbo44f8qR8hmSLnSJchzTQCCWJG1pCu2c
-// ---------------------------------------------------------------------------
 const AUTHORITY_SECRET = Uint8Array.from([
   103, 114, 111, 117, 110, 100, 119, 111, 114, 107, 45, 97, 117, 116, 104,
   111, 114, 105, 116, 121, 103, 114, 111, 117, 110, 100, 119, 111, 114, 107,
@@ -24,8 +20,8 @@ const AUTHORITY_SECRET = Uint8Array.from([
 ]);
 
 const RPC = { skipPreflight: true, commitment: "confirmed" } as const;
-const STAKE = new BN(40_000_000); // 40 USDC
-const MINT_AMOUNT = 200_000_000; // 200 USDC per user
+const STAKE = new BN(40_000_000);
+const MINT_AMOUNT = 200_000_000;
 
 describe("groundwork", () => {
   const provider = anchor.AnchorProvider.env();
@@ -36,20 +32,17 @@ describe("groundwork", () => {
   const payer = (provider.wallet as anchor.Wallet).payer;
   const authority = anchor.web3.Keypair.fromSecretKey(AUTHORITY_SECRET);
 
-  // user1 — streak + re-deposit + COMMIT tests
   const user1 = anchor.web3.Keypair.generate();
-  // user2 (forfeiter) + user3 (claimer) — pool redistribution tests
   const user2 = anchor.web3.Keypair.generate();
   const user3 = anchor.web3.Keypair.generate();
 
   let usdcMint: anchor.web3.PublicKey;
-  let commitMint: anchor.web3.PublicKey; // Token-2022
+  let commitMint: anchor.web3.PublicKey;
 
   let user1UsdcAta: anchor.web3.PublicKey;
   let user2UsdcAta: anchor.web3.PublicKey;
   let user3UsdcAta: anchor.web3.PublicKey;
 
-  // PDAs (derived once, reused throughout)
   let user1Account: anchor.web3.PublicKey;
   let pool: anchor.web3.PublicKey;
   let poolState: anchor.web3.PublicKey;
@@ -78,25 +71,21 @@ describe("groundwork", () => {
       await airdrop(kp.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
     }
 
-    // Standard USDC mock mint
     usdcMint = await createMint(conn, payer, payer.publicKey, null, 6);
 
-    // Derive pool_state PDA before creating the COMMIT mint — it will be the mint authority
     poolState = pda([Buffer.from("pool_state")]);
 
-    // Token-2022 COMMIT mint — mint authority = pool_state PDA, 0 decimals
     commitMint = await createMint(
       conn,
       payer,
-      poolState,   // mint authority
-      null,        // freeze authority
-      0,           // decimals
+      poolState,
+      null,
+      0,
       undefined,
       undefined,
       TOKEN_2022_PROGRAM_ID
     );
 
-    // Fund each user with USDC
     for (const [kp, setter] of [
       [user1, (v: anchor.web3.PublicKey) => (user1UsdcAta = v)],
       [user2, (v: anchor.web3.PublicKey) => (user2UsdcAta = v)],
@@ -109,14 +98,9 @@ describe("groundwork", () => {
       setter(ata);
     }
 
-    // Derive PDAs used in assertions
     user1Account = pda([Buffer.from("user_account"), user1.publicKey.toBuffer()]);
     pool         = pda([Buffer.from("pool")]);
   });
-
-  // ---------------------------------------------------------------------------
-  // initialize_pool
-  // ---------------------------------------------------------------------------
 
   it("initialize_pool: creates pool + pool_state, stores commit_mint", async () => {
     await program.methods
@@ -132,10 +116,6 @@ describe("groundwork", () => {
     const poolInfo = await getAccount(conn, pool);
     assert.equal(Number(poolInfo.amount), 0, "pool starts empty");
   });
-
-  // ---------------------------------------------------------------------------
-  // Streak tracking
-  // ---------------------------------------------------------------------------
 
   it("streak: starts at 0 on first deposit", async () => {
     await program.methods
@@ -164,7 +144,6 @@ describe("groundwork", () => {
   });
 
   it("streak: increments to 2 after second deposit + release", async () => {
-    // Re-deposit (is_active is now false)
     await program.methods
       .depositStake(STAKE)
       .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta, usdcMint })
@@ -182,7 +161,6 @@ describe("groundwork", () => {
   });
 
   it("streak: resets to 0 after forfeit_stake", async () => {
-    // Deposit a third time
     await program.methods
       .depositStake(STAKE)
       .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta, usdcMint })
@@ -200,12 +178,7 @@ describe("groundwork", () => {
     assert.equal(ua.isActive, false, "is_active = false after forfeit");
   });
 
-  // ---------------------------------------------------------------------------
-  // Re-deposit
-  // ---------------------------------------------------------------------------
-
   it("re-deposit: works after settlement (is_active = false)", async () => {
-    // user1's streak was just reset; is_active = false — deposit should succeed
     await program.methods
       .depositStake(STAKE)
       .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta, usdcMint })
@@ -217,7 +190,6 @@ describe("groundwork", () => {
   });
 
   it("re-deposit: rejected mid-month when is_active = true", async () => {
-    // user1 is currently active (just deposited above)
     try {
       await program.methods
         .depositStake(STAKE)
@@ -232,17 +204,12 @@ describe("groundwork", () => {
         `unexpected error: ${err.message}`
       );
     }
-    // Clean up: release so user1 is settled for subsequent tests
     await program.methods
       .releaseStake()
       .accounts({ user: user1.publicKey, userUsdcAta: user1UsdcAta })
       .signers([authority])
       .rpc(RPC);
   });
-
-  // ---------------------------------------------------------------------------
-  // COMMIT token minting (Token-2022)
-  // ---------------------------------------------------------------------------
 
   async function commitBalance(user: anchor.web3.PublicKey): Promise<bigint> {
     const ata = getAssociatedTokenAddressSync(
@@ -252,7 +219,6 @@ describe("groundwork", () => {
     return info.amount;
   }
 
-  /** Explicit Token-2022 ATA address — Anchor can't auto-resolve cross-program ATAs. */
   function commitAta(user: anchor.web3.PublicKey) {
     return getAssociatedTokenAddressSync(
       commitMint, user, false, TOKEN_2022_PROGRAM_ID
@@ -276,7 +242,7 @@ describe("groundwork", () => {
       .signers([authority])
       .rpc(RPC);
 
-    assert.equal(Number(await commitBalance(user1.publicKey)), 250); // 100 + 150
+    assert.equal(Number(await commitBalance(user1.publicKey)), 250);
   });
 
   it("mint_commit: streak 6-11 → 200 tokens", async () => {
@@ -286,7 +252,7 @@ describe("groundwork", () => {
       .signers([authority])
       .rpc(RPC);
 
-    assert.equal(Number(await commitBalance(user1.publicKey)), 450); // + 200
+    assert.equal(Number(await commitBalance(user1.publicKey)), 450);
   });
 
   it("mint_commit: streak 12-23 → 300 tokens", async () => {
@@ -296,7 +262,7 @@ describe("groundwork", () => {
       .signers([authority])
       .rpc(RPC);
 
-    assert.equal(Number(await commitBalance(user1.publicKey)), 750); // + 300
+    assert.equal(Number(await commitBalance(user1.publicKey)), 750);
   });
 
   it("mint_commit: streak 24+ → 400 tokens", async () => {
@@ -306,15 +272,10 @@ describe("groundwork", () => {
       .signers([authority])
       .rpc(RPC);
 
-    assert.equal(Number(await commitBalance(user1.publicKey)), 1150); // + 400
+    assert.equal(Number(await commitBalance(user1.publicKey)), 1150);
   });
 
-  // ---------------------------------------------------------------------------
-  // Pool redistribution
-  // ---------------------------------------------------------------------------
-
   it("reset_month: sets verifiedUsersThisMonth to 0", async () => {
-    // Accumulated releases from streak tests — reset before pool tests
     await program.methods
       .resetMonth()
       .accounts({})
@@ -326,7 +287,6 @@ describe("groundwork", () => {
   });
 
   it("pool redistribution: forfeited user's stake flows to verified user", async () => {
-    // user2 deposits and forfeits — 40 USDC goes to pool
     await program.methods
       .depositStake(STAKE)
       .accounts({ user: user2.publicKey, userUsdcAta: user2UsdcAta, usdcMint })
@@ -339,7 +299,6 @@ describe("groundwork", () => {
       .signers([authority])
       .rpc(RPC);
 
-    // user3 deposits and releases — verified_users_this_month becomes 1
     await program.methods
       .depositStake(STAKE)
       .accounts({ user: user3.publicKey, userUsdcAta: user3UsdcAta, usdcMint })
@@ -358,7 +317,6 @@ describe("groundwork", () => {
     const poolBalBefore = (await getAccount(conn, pool)).amount;
     const user3BalBefore = (await getAccount(conn, user3UsdcAta)).amount;
 
-    // user3 claims their proportional share: pool_balance / 1 = 40 USDC
     await program.methods
       .claimPoolShare()
       .accounts({ user: user3.publicKey, userUsdcAta: user3UsdcAta })
@@ -375,7 +333,6 @@ describe("groundwork", () => {
     );
     assert.equal(Number(poolBalAfter), 0, "pool drained");
 
-    // Verify has_claimed was set
     const ua = await program.account.userAccount.fetch(
       anchor.web3.PublicKey.findProgramAddressSync(
         [Buffer.from("user_account"), user3.publicKey.toBuffer()],
@@ -386,7 +343,6 @@ describe("groundwork", () => {
   });
 
   it("claim_pool_share: rejects double-claim with AlreadyClaimed", async () => {
-    // user3 already claimed above — a second call must be rejected
     try {
       await program.methods
         .claimPoolShare()

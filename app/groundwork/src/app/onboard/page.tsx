@@ -100,7 +100,6 @@ export default function OnboardPage() {
     setSubmitting(true);
     setError("");
     try {
-      // 1. Save user to Firebase
       const onboardRes = await fetch("/api/onboard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -149,7 +148,6 @@ export default function OnboardPage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-white p-8">
       <div className="w-full max-w-md">
-        {/* Progress */}
         <div className="mb-8 flex gap-2">
           {([1, 2, 3, 4] as Step[]).map((s) => (
             <div

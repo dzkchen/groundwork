@@ -24,8 +24,6 @@ export async function POST(req: NextRequest) {
         totalMonths: totalMonths ?? 3,
         monthsCompleted: 0,
         graduated: false,
-        // plaidAccessToken is intentionally NOT set here so merge:true
-        // preserves any value already written by /api/plaid/exchange-token
         streak: 0,
         isActive: false,
         verifiedThisMonth: false,

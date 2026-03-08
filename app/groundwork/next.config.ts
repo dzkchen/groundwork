@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob:",
+              "img-src 'self' data: blob: https://github.com https://avatars.githubusercontent.com",
               "font-src 'self' data:",
               "connect-src 'self' https://*.solana.com wss://*.solana.com https://*.helius.dev https://*.plaid.com https://cdn.plaid.com",
               "frame-src 'self' https://*.plaid.com https://cdn.plaid.com",
