@@ -19,7 +19,23 @@ interface UserData {
   graduated: boolean;
 }
 
+interface MatchParticipant {
+  walletAddress: string;
+  verifiedThisMonth: boolean;
+  isYou: boolean;
+}
+
+interface MatchData {
+  matchId: string;
+  participants: MatchParticipant[];
+}
+
 type Toast = { type: "success" | "error"; message: string };
+
+function shortenWallet(addr: string) {
+  if (addr.length <= 10) return addr;
+  return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
+}
 
 export default function DashboardPage() {
   const { publicKey, connected, signTransaction } = useWallet();
@@ -27,6 +43,7 @@ export default function DashboardPage() {
   const router = useRouter();
 
   const [user, setUser] = useState<UserData | null>(null);
+  const [match, setMatch] = useState<MatchData | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<Toast | null>(null);
 
@@ -44,6 +61,7 @@ export default function DashboardPage() {
       }
       const data = await res.json();
       if (data?.user) setUser(data.user as UserData);
+      setMatch(data?.match ?? null);
     },
     [router]
   );
@@ -123,6 +141,34 @@ export default function DashboardPage() {
       </header>
 
       <div className="w-full max-w-md space-y-4">
+        {match && match.participants.length > 0 && (
+          <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">Your match</p>
+            <p className="mt-1 text-sm text-gray-500">Up to 4 people in this round. Green = contributed this month, red = not yet.</p>
+            <ul className="mt-4 space-y-3">
+              {match.participants.slice(0, 4).map((p) => (
+                <li key={p.walletAddress} className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={`h-3 w-3 shrink-0 rounded-full ${
+                        p.verifiedThisMonth ? "bg-green-500" : "bg-red-500"
+                      }`}
+                      aria-label={p.verifiedThisMonth ? "Contributed" : "Not yet"}
+                    />
+                    <span className="font-mono text-sm text-gray-700">
+                      {shortenWallet(p.walletAddress)}
+                      {p.isYou && <span className="ml-1.5 text-xs text-violet-600">(you)</span>}
+                    </span>
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    {p.verifiedThisMonth ? "Verified" : "Pending"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">Current streak</p>
           <p className="mt-2 text-5xl font-bold text-gray-900">

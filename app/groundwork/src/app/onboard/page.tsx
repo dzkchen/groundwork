@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { usePlaidLink } from "react-plaid-link";
@@ -9,12 +9,9 @@ import { Transaction } from "@solana/web3.js";
 type Step = 1 | 2 | 3 | 4;
 
 const FHSA_MONTHLY_MAX = 667;
-
-const PERIODS = [
-  { months: 3,  label: "Starter",   description: "3 months",  stake: 80 },
-  { months: 6,  label: "Committed", description: "6 months",  stake: 60 },
-  { months: 12, label: "All in",    description: "12 months", stake: 50 },
-] as const;
+const MIN_MONTHLY_COMMITMENT = 50;
+const MATCHMAKING_STAKE = 50;
+const MAX_MATCH_PARTICIPANTS = 4;
 
 export default function OnboardPage() {
   const { publicKey, signTransaction } = useWallet();
@@ -25,28 +22,30 @@ export default function OnboardPage() {
   const [monthlyIncome, setMonthlyIncome] = useState("");
   const [monthlyExpenses, setMonthlyExpenses] = useState("");
   const [commitmentAmount, setCommitmentAmount] = useState("");
-  const [totalMonths, setTotalMonths] = useState<3 | 6 | 12>(3);
+  const [competeMode, setCompeteMode] = useState<"friends" | "random" | null>(null);
+  const [friendsSubMode, setFriendsSubMode] = useState<"choose" | "create" | "join">("choose");
+  const [joinCode, setJoinCode] = useState("");
+  const [matchId, setMatchId] = useState<string | null>(null);
+  const [matchCode, setMatchCode] = useState<string | null>(null);
+  const [matchError, setMatchError] = useState("");
+  const [matchLoading, setMatchLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [bankConnected, setBankConnected] = useState(false);
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [linkTokenLoading, setLinkTokenLoading] = useState(false);
 
-
   const suggestedSavings =
     monthlyIncome && monthlyExpenses
       ? Math.min(
           FHSA_MONTHLY_MAX,
-          Math.max(
-            0,
-            Math.floor((Number(monthlyIncome) - Number(monthlyExpenses)) * 0.2)
-          )
+          Math.max(0, Math.floor((Number(monthlyIncome) - Number(monthlyExpenses)) * 0.2))
         )
       : null;
 
   const monthly = Number(commitmentAmount) || 0;
-  const selectedPeriod = PERIODS.find((p) => p.months === totalMonths)!;
-  const totalStake = selectedPeriod.stake;
+  const totalStake = MATCHMAKING_STAKE;
+  const totalMonths = 1;
 
   useEffect(() => {
     if (step !== 4 || linkToken || linkTokenLoading) return;
@@ -58,11 +57,8 @@ export default function OnboardPage() {
     })
       .then((r) => r.json())
       .then((data) => {
-        if (data.link_token) {
-          setLinkToken(data.link_token);
-        } else {
-          setError(`Bank connection failed: ${data.error ?? "unknown error"}`);
-        }
+        if (data.link_token) setLinkToken(data.link_token);
+        else setError(`Bank connection failed: ${data.error ?? "unknown error"}`);
       })
       .catch((e) => setError(`Failed to initialize bank connection: ${e.message}`))
       .finally(() => setLinkTokenLoading(false));
@@ -90,9 +86,82 @@ export default function OnboardPage() {
 
   function goToStep2() {
     if (suggestedSavings !== null && !commitmentAmount) {
-      setCommitmentAmount(String(suggestedSavings));
+      setCommitmentAmount(String(Math.max(suggestedSavings, MIN_MONTHLY_COMMITMENT)));
     }
     setStep(2);
+  }
+
+  async function handleCreateMatch() {
+    if (!publicKey || monthly < MIN_MONTHLY_COMMITMENT) return;
+    setMatchLoading(true);
+    setMatchError("");
+    try {
+      const res = await fetch("/api/match/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: publicKey.toBase58(),
+          monthlyCommitment: monthly,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to create match");
+      setMatchId(data.matchId);
+      setMatchCode(data.code);
+    } catch (e) {
+      setMatchError(e instanceof Error ? e.message : "Failed to create match");
+    } finally {
+      setMatchLoading(false);
+    }
+  }
+
+  async function handleJoinMatch() {
+    if (!publicKey || !joinCode.trim() || monthly < MIN_MONTHLY_COMMITMENT) return;
+    setMatchLoading(true);
+    setMatchError("");
+    try {
+      const res = await fetch("/api/match/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: publicKey.toBase58(),
+          matchIdOrCode: joinCode.trim().toUpperCase(),
+          monthlyCommitment: monthly,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to join match");
+      setMatchId(data.matchId);
+      setStep(4);
+    } catch (e) {
+      setMatchError(e instanceof Error ? e.message : "Failed to join match");
+    } finally {
+      setMatchLoading(false);
+    }
+  }
+
+  async function handleFindMatch() {
+    if (!publicKey || monthly < MIN_MONTHLY_COMMITMENT) return;
+    setMatchLoading(true);
+    setMatchError("");
+    try {
+      const res = await fetch("/api/match/find", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: publicKey.toBase58(),
+          monthlyCommitment: monthly,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to find match");
+      setMatchId(data.matchId);
+      setStep(4);
+    } catch (e) {
+      setMatchError(e instanceof Error ? e.message : "Failed to find match");
+    } finally {
+      setMatchLoading(false);
+    }
   }
 
   async function handleFinish() {
@@ -108,6 +177,7 @@ export default function OnboardPage() {
           monthlyCommitment: monthly,
           totalMonths,
           stakeAmount: totalStake,
+          matchId: matchId ?? undefined,
         }),
       });
       if (!onboardRes.ok) throw new Error("Failed to save profile");
@@ -167,7 +237,6 @@ export default function OnboardPage() {
                 Enter your monthly income and expenses to see what you can commit.
               </p>
             </div>
-
             <div className="flex flex-col gap-4">
               <label className="flex flex-col gap-1.5">
                 <span className="text-sm font-medium text-gray-700">Monthly take-home income</span>
@@ -200,20 +269,15 @@ export default function OnboardPage() {
                 </div>
               </label>
             </div>
-
             {suggestedSavings !== null && (
               <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
                 <p className="text-xs font-semibold uppercase tracking-widest text-violet-400">Suggested commitment</p>
                 <p className="mt-1 text-2xl font-bold text-violet-700">
-                  ${suggestedSavings.toFixed(2)}
-                  <span className="ml-1 text-sm font-normal text-violet-400">/ month</span>
+                  ${Math.max(suggestedSavings, MIN_MONTHLY_COMMITMENT).toFixed(2)}
+                  <span className="ml-1 text-sm font-normal text-violet-400">/ month (min ${MIN_MONTHLY_COMMITMENT})</span>
                 </p>
-                {suggestedSavings === FHSA_MONTHLY_MAX && (
-                  <p className="mt-0.5 text-xs text-violet-400">Capped at FHSA monthly max ($667)</p>
-                )}
               </div>
             )}
-
             <button
               disabled={!monthlyIncome || !monthlyExpenses}
               onClick={goToStep2}
@@ -229,26 +293,27 @@ export default function OnboardPage() {
             <div>
               <h2 className="text-4xl font-bold text-gray-900">Monthly commitment</h2>
               <p className="mt-1 text-sm text-gray-500">
-                How much will you deposit to your FHSA each month?
+                How much will you deposit to your FHSA each month? Minimum ${MIN_MONTHLY_COMMITMENT}.
               </p>
             </div>
-
             <label className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-gray-700">Monthly commitment amount</span>
               <div className="relative">
                 <span className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-sm text-gray-400">$</span>
                 <input
                   type="number"
-                  min="0"
+                  min={MIN_MONTHLY_COMMITMENT}
                   value={commitmentAmount}
                   onChange={(e) => setCommitmentAmount(e.target.value)}
                   onBlur={(e) => { if (e.target.value) setCommitmentAmount(Number(e.target.value).toFixed(2)); }}
-                  placeholder={suggestedSavings ? suggestedSavings.toFixed(2) : "300.00"}
+                  placeholder={suggestedSavings ? String(Math.max(suggestedSavings, MIN_MONTHLY_COMMITMENT)) : "50.00"}
                   className="w-full rounded-xl border border-gray-200 py-3 pl-8 pr-4 text-sm text-gray-900 placeholder-gray-300 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
                 />
               </div>
+              {commitmentAmount && Number(commitmentAmount) < MIN_MONTHLY_COMMITMENT && (
+                <p className="text-xs text-red-500">Minimum is ${MIN_MONTHLY_COMMITMENT}</p>
+              )}
             </label>
-
             <div className="flex gap-3">
               <button
                 onClick={() => setStep(1)}
@@ -257,7 +322,7 @@ export default function OnboardPage() {
                 Back
               </button>
               <button
-                disabled={!commitmentAmount || Number(commitmentAmount) <= 0}
+                disabled={!commitmentAmount || monthly < MIN_MONTHLY_COMMITMENT}
                 onClick={() => setStep(3)}
                 className="flex-1 rounded-full bg-violet-700 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-30"
               >
@@ -267,68 +332,161 @@ export default function OnboardPage() {
           </div>
         )}
 
-
         {step === 3 && (
           <div className="flex flex-col gap-6">
             <div>
-              <h2 className="text-4xl font-bold text-gray-900">Choose your period</h2>
+              <h2 className="text-4xl font-bold text-gray-900">How do you want to compete?</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Your full stake is locked until you complete every month. Miss one and you lose the entire stake.
+                $50 USDC stake per round. Up to {MAX_MATCH_PARTICIPANTS} people per match.
               </p>
             </div>
 
-            <div className="flex flex-col gap-2">
-              {PERIODS.map(({ months, label, description, stake }) => (
+            {competeMode === null && (
+              <div className="flex flex-col gap-3">
                 <button
-                  key={months}
-                  onClick={() => setTotalMonths(months)}
-                  className={`flex items-center justify-between rounded-xl border px-4 py-4 text-left transition-colors ${
-                    totalMonths === months
-                      ? "border-violet-600 bg-violet-50"
-                      : "border-gray-200 hover:bg-gray-50"
-                  }`}
+                  onClick={() => setCompeteMode("friends")}
+                  className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-4 text-left transition-colors hover:border-violet-300 hover:bg-violet-50"
                 >
-                  <div>
-                    <p className={`text-sm font-semibold ${totalMonths === months ? "text-violet-700" : "text-gray-900"}`}>
-                      {label}
-                    </p>
-                    <p className="text-xs text-gray-400">{description}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className={`text-base font-semibold ${totalMonths === months ? "text-violet-700" : "text-gray-700"}`}>
-                      ${stake.toFixed(2)}
-                    </p>
-                  </div>
+                  <span className="font-semibold text-gray-900">Compete with friends</span>
+                  <span className="text-violet-600">→</span>
                 </button>
-              ))}
-            </div>
-
-            <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm">
-              <div className="flex justify-between text-gray-500">
-                <span>Stake deposit</span>
-                <span className="font-semibold text-gray-900">${totalStake.toFixed(2)} USDC</span>
+                <button
+                  onClick={() => setCompeteMode("random")}
+                  className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-4 text-left transition-colors hover:border-violet-300 hover:bg-violet-50"
+                >
+                  <span className="font-semibold text-gray-900">Random matchmaking</span>
+                  <span className="text-sm text-gray-500">We match you by commitment level</span>
+                </button>
               </div>
-              <div className="mt-1 flex justify-between text-gray-500">
-                <span>Returned at graduation</span>
-                <span className="font-semibold text-gray-900">full ${totalStake.toFixed(2)} USDC +</span>
-              </div>
-              <p className="mt-2 text-xs text-gray-400">+ your share of forfeited stakes from others who miss payments</p>
-            </div>
+            )}
 
-            <div className="flex gap-3">
+            {competeMode === "random" && (
+              <div className="flex flex-col gap-4">
+                <p className="text-sm text-gray-600">
+                  We&apos;ll find others with the same monthly commitment (${monthly.toFixed(2)}). $50 USDC stake.
+                </p>
+                {matchError && <p className="text-sm text-red-500">{matchError}</p>}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => { setCompeteMode(null); setMatchError(""); }}
+                    className="flex-1 rounded-full border border-gray-200 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50"
+                  >
+                    Back
+                  </button>
+                  <button
+                    disabled={matchLoading}
+                    onClick={handleFindMatch}
+                    className="flex-1 rounded-full bg-violet-700 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-50"
+                  >
+                    {matchLoading ? "Finding match…" : "Find a match"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {competeMode === "friends" && friendsSubMode === "choose" && (
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => setFriendsSubMode("create")}
+                  className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-4 text-left transition-colors hover:border-violet-300 hover:bg-violet-50"
+                >
+                  <span className="font-semibold text-gray-900">Create a match</span>
+                  <span className="text-violet-600">→</span>
+                </button>
+                <button
+                  onClick={() => setFriendsSubMode("join")}
+                  className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-4 text-left transition-colors hover:border-violet-300 hover:bg-violet-50"
+                >
+                  <span className="font-semibold text-gray-900">Join with code</span>
+                  <span className="text-violet-600">→</span>
+                </button>
+                <button
+                  onClick={() => setCompeteMode(null)}
+                  className="rounded-full border border-gray-200 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50"
+                >
+                  Back
+                </button>
+              </div>
+            )}
+
+            {competeMode === "friends" && friendsSubMode === "create" && (
+              <div className="flex flex-col gap-4">
+                {!matchCode ? (
+                  <>
+                    <p className="text-sm text-gray-600">Create a match and share the code with friends (max {MAX_MATCH_PARTICIPANTS}).</p>
+                    {matchError && <p className="text-sm text-red-500">{matchError}</p>}
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => { setFriendsSubMode("choose"); setMatchError(""); }}
+                        className="flex-1 rounded-full border border-gray-200 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50"
+                      >
+                        Back
+                      </button>
+                      <button
+                        disabled={matchLoading}
+                        onClick={handleCreateMatch}
+                        className="flex-1 rounded-full bg-violet-700 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-50"
+                      >
+                        {matchLoading ? "Creating…" : "Create match"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-violet-600">Share this code with friends</p>
+                      <p className="mt-2 text-3xl font-mono font-bold tracking-widest text-violet-900">{matchCode}</p>
+                      <p className="mt-1 text-xs text-violet-600">Up to {MAX_MATCH_PARTICIPANTS} people can join.</p>
+                    </div>
+                    <button
+                      onClick={() => setStep(4)}
+                      className="rounded-full bg-violet-700 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85"
+                    >
+                      Continue to connect bank &amp; deposit
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {competeMode === "friends" && friendsSubMode === "join" && (
+              <div className="flex flex-col gap-4">
+                <p className="text-sm text-gray-600">Enter the 6-character code from your friend.</p>
+                <input
+                  type="text"
+                  maxLength={6}
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                  placeholder="ABC123"
+                  className="w-full rounded-xl border border-gray-200 py-3 px-4 text-center text-lg font-mono tracking-widest uppercase placeholder-gray-300 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                />
+                {matchError && <p className="text-sm text-red-500">{matchError}</p>}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => { setFriendsSubMode("choose"); setJoinCode(""); setMatchError(""); }}
+                    className="flex-1 rounded-full border border-gray-200 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50"
+                  >
+                    Back
+                  </button>
+                  <button
+                    disabled={matchLoading || joinCode.trim().length !== 6}
+                    onClick={handleJoinMatch}
+                    className="flex-1 rounded-full bg-violet-700 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-50"
+                  >
+                    {matchLoading ? "Joining…" : "Join match"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {competeMode === null && (
               <button
                 onClick={() => setStep(2)}
-                className="flex-1 rounded-full border border-gray-200 py-3 text-sm font-semibold text-gray-500 transition-colors hover:bg-gray-50"
+                className="rounded-full border border-gray-200 py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50"
               >
                 Back
               </button>
-              <button
-                onClick={() => setStep(4)}
-                className="flex-1 rounded-full bg-violet-700 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-85"
-              >
-                Continue
-              </button>
-            </div>
+            )}
           </div>
         )}
 
@@ -337,7 +495,7 @@ export default function OnboardPage() {
             <div>
               <h2 className="text-4xl font-bold text-gray-900">Connect &amp; deposit</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Link your bank so we can verify contributions, then deposit your stake.
+                Link your bank so we can verify contributions, then deposit your $50 stake.
               </p>
             </div>
 
@@ -365,14 +523,14 @@ export default function OnboardPage() {
 
             <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm">
               <div className="flex justify-between text-gray-500">
-                <span>Period</span>
-                <span className="font-semibold text-gray-900">{totalMonths} months</span>
+                <span>Stake (this round)</span>
+                <span className="font-semibold text-gray-900">$50 USDC</span>
               </div>
               <div className="mt-2 flex justify-between border-t border-gray-200 pt-2 text-gray-700">
-                <span className="font-semibold">Stake (one-time)</span>
-                <span className="font-bold text-violet-700">${totalStake.toFixed(2)} USDC</span>
+                <span className="font-semibold">One-time deposit</span>
+                <span className="font-bold text-violet-700">$50.00 USDC</span>
               </div>
-              <p className="mt-2 text-xs text-gray-400">Held until graduation. Returned in full + pool share if you complete every month.</p>
+              <p className="mt-2 text-xs text-gray-400">Returned in full + pool share when you verify your FHSA contribution this month.</p>
             </div>
 
             {error && <p className="text-sm text-red-500">{error}</p>}
@@ -395,7 +553,7 @@ export default function OnboardPage() {
                     Depositing...
                   </span>
                 ) : (
-                  `Deposit $${totalStake.toFixed(2)} USDC`
+                  "Deposit $50 USDC"
                 )}
               </button>
             </div>

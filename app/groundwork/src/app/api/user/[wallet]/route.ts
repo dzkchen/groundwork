@@ -22,14 +22,38 @@ export async function GET(
 ) {
   try {
     const { wallet } = await params;
-    const ref = getDb().collection("users").doc(wallet);
+    const db = getDb();
+    const ref = db.collection("users").doc(wallet);
     const snap = await ref.get();
 
     if (!snap.exists) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ user: snap.data() }, { status: 200 });
+    const userData = snap.data()!;
+    let match: { matchId: string; participants: { walletAddress: string; verifiedThisMonth: boolean; isYou: boolean }[] } | null = null;
+
+    const matchId = userData.matchId;
+    if (matchId) {
+      const matchSnap = await db.collection("matches").doc(matchId).get();
+      if (matchSnap.exists) {
+        const participants: string[] = matchSnap.data()?.participants ?? [];
+        const participantsWithStatus = await Promise.all(
+          participants.map(async (wa: string) => {
+            const u = await db.collection("users").doc(wa).get();
+            const verifiedThisMonth = u.exists ? (u.data()?.verifiedThisMonth === true) : false;
+            return {
+              walletAddress: wa,
+              verifiedThisMonth,
+              isYou: wa === wallet,
+            };
+          })
+        );
+        match = { matchId, participants: participantsWithStatus };
+      }
+    }
+
+    return NextResponse.json({ user: userData, match }, { status: 200 });
   } catch (err) {
     console.error("GET /api/user/[wallet]:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

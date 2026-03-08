@@ -4,7 +4,7 @@ import { FieldValue } from "firebase-admin/firestore";
 
 export async function POST(req: NextRequest) {
   try {
-    const { walletAddress, fhsaProvider, monthlyCommitment, totalMonths, stakeAmount } = await req.json();
+    const { walletAddress, fhsaProvider, monthlyCommitment, totalMonths, stakeAmount, matchId } = await req.json();
 
     if (!walletAddress) {
       return NextResponse.json(
@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
         monthlyCommitment: monthlyCommitment ?? null,
         stakeAmount: stakeAmount ?? null,
         totalMonths: totalMonths ?? 3,
+        matchId: matchId ?? null,
         monthsCompleted: 0,
         graduated: false,
         streak: 0,
