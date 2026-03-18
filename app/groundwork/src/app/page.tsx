@@ -45,6 +45,12 @@ export default function LandingPage() {
             >
               Get started
             </Link>
+            <Link
+              href="/demo-get-started"
+              className="rounded-full border border-stone-200 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-50"
+            >
+              Try demo
+            </Link>
           </div>
         </div>
       </nav>
@@ -66,8 +72,14 @@ export default function LandingPage() {
             Get started
           </Link>
           <Link
-            href="/reasoning"
+            href="/demo-get-started"
             className="inline-flex rounded-full border-2 border-violet-600 bg-white px-8 py-3 text-base font-semibold text-violet-700 transition-colors hover:bg-violet-50"
+          >
+            Try demo
+          </Link>
+          <Link
+            href="/reasoning"
+            className="inline-flex rounded-full border-2 border-stone-200 bg-white px-8 py-3 text-base font-semibold text-stone-700 transition-colors hover:bg-stone-50"
           >
             How it works
           </Link>
