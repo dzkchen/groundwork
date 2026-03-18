@@ -7,9 +7,6 @@ use anchor_spl::{
 
 declare_id!("3y5dGx98G2jZ7STFqHoaxzsX9PRYPFdfTPBqnVanXJL3");
 
-/// Hardcoded program authority — replace before mainnet deployment.
-/// Generated deterministically from seed "groundwork-authority":
-///   pubkey: QVxt9ixFYpSbo44f8qR8hmSLnSJchzTQCCWJG1pCu2c
 const AUTHORITY_PUBKEY: Pubkey = Pubkey::new_from_array([
     6, 5, 27, 147, 157, 238, 108, 216, 95, 122, 148, 143, 20, 89, 29, 105, 117, 83, 2, 94, 242,
     207, 234, 208, 52, 122, 236, 171, 152, 17, 160, 149,
@@ -19,9 +16,6 @@ const AUTHORITY_PUBKEY: Pubkey = Pubkey::new_from_array([
 pub mod groundwork {
     use super::*;
 
-    /// Transfers `amount` USDC from the user's ATA into their PDA vault and
-    /// initialises (or re-uses) their UserAccount for this month's commitment.
-    /// Rejects if the user already has an active deposit this month.
     pub fn deposit_stake(mut ctx: Context<DepositStake>, amount: u64) -> Result<()> {
         require!(amount > 0, GroundworkError::InvalidAmount);
         require!(
@@ -36,7 +30,6 @@ pub mod groundwork {
         accs.user_account.is_active = true;
         accs.user_account.has_claimed = false;
         accs.user_account.month_start = Clock::get()?.unix_timestamp;
-        // streak is preserved across months — incremented on release, reset on forfeit
 
         token::transfer(
             CpiContext::new(
@@ -53,17 +46,12 @@ pub mod groundwork {
         Ok(())
     }
 
-    /// Creates the shared USDC pool token account and PoolState metadata account.
-    /// The COMMIT mint must already exist with pool_state PDA as its mint authority.
-    /// Callable once by the authority at program setup.
     pub fn initialize_pool(ctx: Context<InitializePool>) -> Result<()> {
         ctx.accounts.pool_state.commit_mint = ctx.accounts.commit_mint.key();
         ctx.accounts.pool_state.verified_users_this_month = 0;
         Ok(())
     }
 
-    /// Callable only by AUTHORITY_PUBKEY. Marks the stake verified, increments
-    /// the user's streak, and returns USDC to the user.
     pub fn release_stake(ctx: Context<ReleaseStake>) -> Result<()> {
         let stake_amount = ctx.accounts.user_account.stake_amount;
         let user_key = ctx.accounts.user.key();
@@ -93,8 +81,6 @@ pub mod groundwork {
         Ok(())
     }
 
-    /// Callable only by AUTHORITY_PUBKEY. Resets the user's streak and transfers
-    /// vault balance to the shared pool (missed contribution).
     pub fn forfeit_stake(ctx: Context<ForfeitStake>) -> Result<()> {
         let amount = ctx.accounts.vault.amount;
         require!(amount > 0, GroundworkError::VaultEmpty);
@@ -123,9 +109,6 @@ pub mod groundwork {
         Ok(())
     }
 
-    /// Callable only by AUTHORITY_PUBKEY. Mints COMMIT tokens (Token-2022) to
-    /// a user's associated token account based on their current streak.
-    /// Streak multipliers: 1-2 → 100, 3-5 → 150, 6-11 → 200, 12-23 → 300, 24+ → 400
     pub fn mint_commit(
         ctx: Context<MintCommit>,
         _user_pubkey: Pubkey,
@@ -159,8 +142,6 @@ pub mod groundwork {
         Ok(())
     }
 
-    /// Callable by any verified user. Transfers their proportional share of the
-    /// USDC pool (pool_balance / verified_users_this_month) to their ATA.
     pub fn claim_pool_share(ctx: Context<ClaimPoolShare>) -> Result<()> {
         require!(
             !ctx.accounts.user_account.has_claimed,
@@ -202,17 +183,11 @@ pub mod groundwork {
         Ok(())
     }
 
-    /// Callable only by AUTHORITY_PUBKEY. Resets verified_users_this_month to 0
-    /// at the start of each new month.
     pub fn reset_month(ctx: Context<ResetMonth>) -> Result<()> {
         ctx.accounts.pool_state.verified_users_this_month = 0;
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Account contexts
-// ---------------------------------------------------------------------------
 
 #[derive(Accounts)]
 pub struct DepositStake<'info> {
@@ -251,8 +226,6 @@ pub struct InitializePool<'info> {
     #[account(mut, address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
     pub authority: Signer<'info>,
 
-    /// Shared USDC pool. Self-custodied: the pool PDA is its own token authority,
-    /// so future withdrawals sign with seeds [b"pool", bump].
     #[account(
         init,
         payer = authority,
@@ -272,7 +245,6 @@ pub struct InitializePool<'info> {
     )]
     pub pool_state: Account<'info, PoolState>,
 
-    /// Token-2022 COMMIT mint — must already exist with pool_state as mint authority.
     pub commit_mint: InterfaceAccount<'info, InterfaceMint>,
 
     pub usdc_mint: Account<'info, Mint>,
@@ -285,7 +257,6 @@ pub struct ReleaseStake<'info> {
     #[account(address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
     pub authority: Signer<'info>,
 
-    /// CHECK: used only for PDA seed derivation; not read or written.
     pub user: UncheckedAccount<'info>,
 
     #[account(
@@ -320,7 +291,6 @@ pub struct ForfeitStake<'info> {
     #[account(address = AUTHORITY_PUBKEY @ GroundworkError::Unauthorized)]
     pub authority: Signer<'info>,
 
-    /// CHECK: used only for PDA seed derivation; not read or written.
     pub user: UncheckedAccount<'info>,
 
     #[account(
@@ -365,7 +335,6 @@ pub struct MintCommit<'info> {
     )]
     pub commit_mint: InterfaceAccount<'info, InterfaceMint>,
 
-    /// CHECK: used only for ATA derivation.
     pub user: UncheckedAccount<'info>,
 
     #[account(
@@ -425,10 +394,6 @@ pub struct ResetMonth<'info> {
     pub pool_state: Account<'info, PoolState>,
 }
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
 #[account]
 #[derive(InitSpace)]
 pub struct UserAccount {
@@ -447,10 +412,6 @@ pub struct PoolState {
     pub commit_mint: Pubkey,
     pub verified_users_this_month: u32,
 }
-
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
 
 #[error_code]
 pub enum GroundworkError {
