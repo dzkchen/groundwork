@@ -7,8 +7,6 @@ import {
   Connection,
   PublicKey,
   SystemProgram,
-  Transaction,
-  VersionedTransaction,
 } from "@solana/web3.js";
 import { AnchorProvider, Program } from "@coral-xyz/anchor";
 import type { Idl } from "@coral-xyz/anchor";
@@ -19,30 +17,18 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import idl from "@/lib/idl.json";
+import { keypairAsWallet } from "@/lib/solana-wallet";
 
-function keypairAsWallet(payer: Keypair) {
-  return {
-    publicKey: payer.publicKey,
-    signTransaction: async (tx: Transaction | VersionedTransaction) => {
-      if (tx instanceof VersionedTransaction) {
-        tx.sign([payer]);
-      } else {
-        tx.partialSign(payer);
-      }
-      return tx;
-    },
-    signAllTransactions: async (txs: (Transaction | VersionedTransaction)[]) => {
-      return txs.map((tx) => {
-        if (tx instanceof VersionedTransaction) {
-          tx.sign([payer]);
-        } else {
-          tx.partialSign(payer);
-        }
-        return tx;
-      });
-    },
-  };
-}
+type AnchorRpcBuilder = {
+  accounts: (accounts: Record<string, unknown>) => { rpc: () => Promise<unknown> };
+};
+
+type CronMethods = {
+  releaseStake: () => AnchorRpcBuilder;
+  mintCommit: (user: PublicKey, streak: number) => AnchorRpcBuilder;
+  forfeitStake: () => AnchorRpcBuilder;
+  resetMonth: () => AnchorRpcBuilder;
+};
 
 function buildProgram(): { program: Program; authority: Keypair } {
   const keyArray = JSON.parse(process.env.AUTHORITY_PRIVATE_KEY!);
@@ -79,8 +65,11 @@ async function getCommitMint(program: Program): Promise<PublicKey> {
     [Buffer.from("pool_state")],
     program.programId
   );
-  const state = await (program.account as any).poolState.fetch(poolStatePda);
-  return state.commitMint as PublicKey;
+  const account = program.account as unknown as {
+    poolState: { fetch: (pda: PublicKey) => Promise<{ commitMint: PublicKey }> };
+  };
+  const state = await account.poolState.fetch(poolStatePda);
+  return state.commitMint;
 }
 
 async function callReleaseStake(
@@ -92,7 +81,7 @@ async function callReleaseStake(
   const { userAccount, vault, poolState } = pdas(userPubkey, program.programId);
   const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, userPubkey);
 
-  await (program.methods as any)
+  await (program.methods as unknown as CronMethods)
     .releaseStake()
     .accounts({
       authority: authority.publicKey,
@@ -121,7 +110,7 @@ async function callMintCommit(
     TOKEN_2022_PROGRAM_ID
   );
 
-  await (program.methods as any)
+  await (program.methods as unknown as CronMethods)
     .mintCommit(userPubkey, streak)
     .accounts({
       authority: authority.publicKey,
@@ -143,7 +132,7 @@ async function callForfeitStake(
 ) {
   const { userAccount, vault, pool } = pdas(userPubkey, program.programId);
 
-  await (program.methods as any)
+  await (program.methods as unknown as CronMethods)
     .forfeitStake()
     .accounts({
       authority: authority.publicKey,
@@ -162,7 +151,7 @@ async function callResetMonth(program: Program, authority: Keypair) {
     program.programId
   );
 
-  await (program.methods as any)
+  await (program.methods as unknown as CronMethods)
     .resetMonth()
     .accounts({ authority: authority.publicKey, poolState })
     .rpc();

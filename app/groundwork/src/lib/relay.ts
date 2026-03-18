@@ -12,25 +12,10 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import idl from "./idl.json";
+import { keypairAsWallet } from "./solana-wallet";
 
 const PROGRAM_ID = new PublicKey((idl as { address: string }).address);
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
-
-function keypairAsWallet(payer: Keypair) {
-  return {
-    publicKey: payer.publicKey,
-    signTransaction: async (tx: Transaction) => {
-      tx.partialSign(payer);
-      return tx;
-    },
-    signAllTransactions: async (txs: Transaction[]) => {
-      return txs.map((tx) => {
-        tx.partialSign(payer);
-        return tx;
-      });
-    },
-  } as never;
-}
 
 function getFeePayer(): Keypair {
   const raw = process.env.FEE_PAYER_PRIVATE_KEY;
@@ -46,7 +31,7 @@ export function getRelayConnection(): Connection {
 export function buildRelayProgram(): { program: Program; feePayer: Keypair; connection: Connection } {
   const feePayer = getFeePayer();
   const connection = getRelayConnection();
-  const provider = new AnchorProvider(connection, keypairAsWallet(feePayer), {
+  const provider = new AnchorProvider(connection, keypairAsWallet(feePayer) as never, {
     commitment: "confirmed",
   });
   const program = new Program(idl as Idl, provider);
@@ -78,11 +63,20 @@ export async function buildSponsoredTx(
   const tx = new Transaction();
   tx.add(instruction);
   tx.feePayer = feePayer.publicKey;
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+  const { blockhash } = await connection.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.partialSign(feePayer);
   return tx.serialize({ requireAllSignatures: false }).toString("base64");
 }
+
+type AnchorIxBuilder = {
+  accounts: (accounts: Record<string, unknown>) => { instruction: () => Promise<unknown> };
+};
+
+type RelayMethods = {
+  depositStake: (amount: BN) => AnchorIxBuilder;
+  claimPoolShare: () => AnchorIxBuilder;
+};
 
 export async function buildDepositStakeTx(userWallet: string, amountUsdc: number): Promise<string> {
   const usdcMintStr = process.env.NEXT_PUBLIC_USDC_MINT;
@@ -96,9 +90,9 @@ export async function buildDepositStakeTx(userWallet: string, amountUsdc: number
     PROGRAM_ID
   );
   const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, userPubkey);
-  const lumpSum = new BN(amountUsdc * 1_000_000);
+  const lumpSum = new BN(Math.round(amountUsdc * 1_000_000));
 
-  const ix = await (program.methods as any)
+  const ix = (await (program.methods as unknown as RelayMethods)
     .depositStake(lumpSum)
     .accounts({
       user: userPubkey,
@@ -109,7 +103,7 @@ export async function buildDepositStakeTx(userWallet: string, amountUsdc: number
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
-    .instruction();
+    .instruction()) as Parameters<Transaction["add"]>[0];
   return buildSponsoredTx(connection, feePayer, ix);
 }
 
@@ -122,7 +116,7 @@ export async function buildClaimPoolShareTx(userWallet: string): Promise<string>
   const { userAccount, pool, poolState } = pdas(userPubkey);
   const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, userPubkey);
 
-  const ix = await (program.methods as any)
+  const ix = (await (program.methods as unknown as RelayMethods)
     .claimPoolShare()
     .accounts({
       user: userPubkey,
@@ -132,6 +126,6 @@ export async function buildClaimPoolShareTx(userWallet: string): Promise<string>
       userUsdcAta,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
-    .instruction();
+    .instruction()) as Parameters<Transaction["add"]>[0];
   return buildSponsoredTx(connection, feePayer, ix);
 }

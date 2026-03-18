@@ -87,7 +87,7 @@ export default function ReasoningPage() {
             3. Loss aversion: the main driver
           </h2>
           <p className="mt-3 text-stone-600 leading-relaxed">
-            In <strong>Prospect Theory</strong>, losses hurt about twice as much as equivalent gains (Kahneman & Tversky, 1979). A small bonus for contributing wouldn’t move the needle. Putting your own capital at risk does: failing to contribute no longer means “missing out later"; it means an immediate, tangible loss. People also tend to prefer these “loss contracts” because they work as a strong psychological stick (Imas, Sadoff & Samek, 2017).
+            In <strong>Prospect Theory</strong>, losses hurt about twice as much as equivalent gains (Kahneman & Tversky, 1979). A small bonus for contributing wouldn’t move the needle. Putting your own capital at risk does: failing to contribute no longer means “missing out later”; it means an immediate, tangible loss. People also tend to prefer these “loss contracts” because they work as a strong psychological stick (Imas, Sadoff & Samek, 2017).
           </p>
         </section>
 
