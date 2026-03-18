@@ -54,12 +54,19 @@ pub mod groundwork {
 
     pub fn release_stake(ctx: Context<ReleaseStake>) -> Result<()> {
         let stake_amount = ctx.accounts.user_account.stake_amount;
+        require!(stake_amount > 0, GroundworkError::InvalidAmount);
+        require!(ctx.accounts.user_account.is_active, GroundworkError::UserNotActive);
+        require!(
+            !ctx.accounts.user_account.verified,
+            GroundworkError::AlreadyVerified
+        );
         let user_key = ctx.accounts.user.key();
         let bump = ctx.bumps.user_account;
 
         ctx.accounts.user_account.verified = true;
         ctx.accounts.user_account.is_active = false;
         ctx.accounts.user_account.streak += 1;
+        ctx.accounts.user_account.stake_amount = 0;
         ctx.accounts.pool_state.verified_users_this_month += 1;
 
         let seeds: &[&[u8]] = &[b"user_account", user_key.as_ref(), &[bump]];
@@ -82,11 +89,17 @@ pub mod groundwork {
     }
 
     pub fn forfeit_stake(ctx: Context<ForfeitStake>) -> Result<()> {
-        let amount = ctx.accounts.vault.amount;
-        require!(amount > 0, GroundworkError::VaultEmpty);
+        let amount = ctx.accounts.user_account.stake_amount;
+        require!(amount > 0, GroundworkError::InvalidAmount);
+        require!(ctx.accounts.user_account.is_active, GroundworkError::UserNotActive);
+        require!(
+            !ctx.accounts.user_account.verified,
+            GroundworkError::AlreadyVerified
+        );
 
         ctx.accounts.user_account.streak = 0;
         ctx.accounts.user_account.is_active = false;
+        ctx.accounts.user_account.stake_amount = 0;
 
         let user_key = ctx.accounts.user.key();
         let bump = ctx.bumps.user_account;
@@ -151,6 +164,10 @@ pub mod groundwork {
             ctx.accounts.user_account.verified,
             GroundworkError::NotVerified
         );
+        require!(
+            !ctx.accounts.user_account.is_active,
+            GroundworkError::UserNotSettled
+        );
 
         let verified = ctx.accounts.pool_state.verified_users_this_month;
         require!(verified > 0, GroundworkError::NoVerifiedUsers);
@@ -213,7 +230,11 @@ pub struct DepositStake<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = user_usdc_ata.owner == user.key() @ GroundworkError::InvalidUsdcAccount,
+        constraint = user_usdc_ata.mint == usdc_mint.key() @ GroundworkError::InvalidUsdcAccount,
+    )]
     pub user_usdc_ata: Account<'info, TokenAccount>,
 
     pub usdc_mint: Account<'info, Mint>,
@@ -263,6 +284,7 @@ pub struct ReleaseStake<'info> {
         mut,
         seeds = [b"user_account", user.key().as_ref()],
         bump,
+        constraint = user_account.wallet == user.key() @ GroundworkError::InvalidUserAccount,
     )]
     pub user_account: Account<'info, UserAccount>,
 
@@ -270,11 +292,15 @@ pub struct ReleaseStake<'info> {
         mut,
         seeds = [b"vault", user.key().as_ref()],
         bump,
+        token::mint = usdc_mint,
+        token::authority = user_account,
     )]
     pub vault: Account<'info, TokenAccount>,
 
     #[account(mut)]
     pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    pub usdc_mint: Account<'info, Mint>,
 
     #[account(
         mut,
@@ -297,6 +323,7 @@ pub struct ForfeitStake<'info> {
         mut,
         seeds = [b"user_account", user.key().as_ref()],
         bump,
+        constraint = user_account.wallet == user.key() @ GroundworkError::InvalidUserAccount,
     )]
     pub user_account: Account<'info, UserAccount>,
 
@@ -304,6 +331,8 @@ pub struct ForfeitStake<'info> {
         mut,
         seeds = [b"vault", user.key().as_ref()],
         bump,
+        token::mint = usdc_mint,
+        token::authority = user_account,
     )]
     pub vault: Account<'info, TokenAccount>,
 
@@ -311,8 +340,12 @@ pub struct ForfeitStake<'info> {
         mut,
         seeds = [b"pool"],
         bump,
+        token::mint = usdc_mint,
+        token::authority = pool,
     )]
     pub pool: Account<'info, TokenAccount>,
+
+    pub usdc_mint: Account<'info, Mint>,
 
     pub token_program: Program<'info, Token>,
 }
@@ -359,6 +392,7 @@ pub struct ClaimPoolShare<'info> {
         mut,
         seeds = [b"user_account", user.key().as_ref()],
         bump,
+        constraint = user_account.wallet == user.key() @ GroundworkError::InvalidUserAccount,
     )]
     pub user_account: Account<'info, UserAccount>,
 
@@ -366,6 +400,8 @@ pub struct ClaimPoolShare<'info> {
         mut,
         seeds = [b"pool"],
         bump,
+        token::mint = usdc_mint,
+        token::authority = pool,
     )]
     pub pool: Account<'info, TokenAccount>,
 
@@ -375,8 +411,14 @@ pub struct ClaimPoolShare<'info> {
     )]
     pub pool_state: Account<'info, PoolState>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = user_usdc_ata.owner == user.key() @ GroundworkError::InvalidUsdcAccount,
+        constraint = user_usdc_ata.mint == usdc_mint.key() @ GroundworkError::InvalidUsdcAccount,
+    )]
     pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    pub usdc_mint: Account<'info, Mint>,
 
     pub token_program: Program<'info, Token>,
 }
@@ -431,4 +473,14 @@ pub enum GroundworkError {
     EmptyPool,
     #[msg("User has already claimed their pool share this month")]
     AlreadyClaimed,
+    #[msg("User is not active for this period")]
+    UserNotActive,
+    #[msg("User already verified for this period")]
+    AlreadyVerified,
+    #[msg("User must be settled before claiming")]
+    UserNotSettled,
+    #[msg("Provided USDC token account is invalid")]
+    InvalidUsdcAccount,
+    #[msg("User account does not match provided user")]
+    InvalidUserAccount,
 }
