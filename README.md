@@ -4,7 +4,7 @@ Ground Work is a decentralized application (dApp) designed to incentivize users 
 
 Created for the Hack Canada hackathon, this project aims to solve real problems Canadians face by transforming how they approach saving for their first property.
 
-**Note: This project is depreciated as we are transitioning to a different idea for the hackathon.**
+**Note: This project is depreciated as it is only serving as a proof of concept**
 
 ![Ground Work Logo](./ground_work_logo.png)
 
